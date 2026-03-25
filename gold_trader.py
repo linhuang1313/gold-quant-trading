@@ -201,6 +201,7 @@ class GoldTrader:
 
             # 出场判断
             reason = None
+            direction = track.get('direction', 'BUY')
 
             # 1. 策略出场信号
             exit_sig = check_exit_signal(df, strategy, direction)
@@ -211,10 +212,6 @@ class GoldTrader:
             max_hold = config.STRATEGIES.get(strategy, {}).get('max_hold_bars', 15)
             if not reason and hold_days >= max_hold:
                 reason = f"⏰ 时间止损: {hold_days}天 >= {max_hold}天"
-
-            # 硬止损由MT4的SL单自动处理
-            # 策略出场信号需要知道方向
-            direction = track.get('direction', 'BUY')
 
             if reason:
                 log.info(f"      → {reason}")
@@ -248,6 +245,15 @@ class GoldTrader:
 
         return exits
 
+    def _get_current_direction(self) -> Optional[str]:
+        """获取当前持仓方向 (BUY/SELL/None)"""
+        positions = self.get_strategy_positions()
+        if not positions:
+            return None
+        # 以第一笔持仓的方向为准 (0=BUY, 1=SELL)
+        pos_type = positions[0].get('type', 0)
+        return 'SELL' if pos_type == 1 else 'BUY'
+
     def _check_entries(self, df: pd.DataFrame, timeframe: str = 'H1') -> List[Dict]:
         """检查新入场信号"""
         # 持仓数检查
@@ -255,6 +261,9 @@ class GoldTrader:
         if len(current_positions) >= config.MAX_POSITIONS:
             log.info(f"\n  📊 已持有 {len(current_positions)}/{config.MAX_POSITIONS} 笔，不再开仓")
             return []
+
+        # 获取当前持仓方向，防止开反向仓
+        current_dir = self._get_current_direction()
 
         slots = config.MAX_POSITIONS - len(current_positions)
         log.info(f"\n  🔍 信号扫描 (可开 {slots} 笔):")
@@ -278,13 +287,18 @@ class GoldTrader:
             reason = sig['reason']
             close = sig['close']
 
+            # 方向冲突检测: 已有持仓时不开反向仓
+            direction = sig['signal']  # 'BUY' 或 'SELL'
+            if current_dir and direction != current_dir:
+                log.info(f"    ⛔ {reason} — 但当前持仓方向为{current_dir}，跳过反向{direction}信号")
+                continue
+
             log.info(f"    🚀 {reason}")
 
             # 计算止损价
             sl_pips = config.STRATEGIES.get(strategy, {}).get('stop_loss', config.STOP_LOSS_PIPS)
 
             # 执行交易 (做多或做空)
-            direction = sig['signal']  # 'BUY' 或 'SELL'
             sl_pips = sig.get('sl', config.STOP_LOSS_PIPS)
             
             if direction == 'BUY':
