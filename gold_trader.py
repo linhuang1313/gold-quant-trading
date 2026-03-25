@@ -63,10 +63,9 @@ class GoldTrader:
     # ── 数据获取 ──
 
     def get_daily_data(self) -> Optional[pd.DataFrame]:
-        """获取XAU/USD日线数据 (通过GLD代理)"""
+        """获取黄金日线数据 (COMEX黄金期货GC=F，与XAU/USD价格一致)"""
         try:
-            # 用GLD获取日线数据，走势与XAU/USD一致
-            df = yf.download('GLD', period='300d', progress=False)
+            df = yf.download('GC=F', period='300d', progress=False)
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
             df = df.dropna(subset=['Close'])

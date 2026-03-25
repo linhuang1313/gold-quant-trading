@@ -41,6 +41,7 @@ def prepare_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
     # ATR & Range
     df['ATR'] = (df['High'] - df['Low']).rolling(14).mean()
+    df['ATR_min50'] = df['ATR'].rolling(50).min()
     df['Range'] = (df['High'] - df['Low']) / df['Close'] * 100
     df['Range_avg'] = df['Range'].rolling(10).mean()
 
