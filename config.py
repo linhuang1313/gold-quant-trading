@@ -35,7 +35,7 @@ COOLDOWN_BARS = 3         # 止损后冷却期 (3根H1 K线 = 3小时)
 RISK_PER_TRADE = 100      # 每笔交易最大风险金额 ($100)
 AUTO_LOT_SIZING = True    # 是否启用ATR自动调仓 (True=根据ATR调整手数, False=固定LOT_SIZE)
 MIN_LOT_SIZE = 0.01       # 最小手数
-MAX_LOT_SIZE = 0.05       # 最大手数
+MAX_LOT_SIZE = 0.03       # 最大手数 (本金$2000, 保守控制)
 
 # ── ORB策略参数 ──
 ORB_ENABLED = True                # 是否启用NY开盘区间突破策略

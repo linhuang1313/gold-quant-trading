@@ -182,31 +182,33 @@ class MT4Bridge:
                 pass
         return False
 
-    def buy(self, lots: float = None, sl_pips: float = None, comment: str = "") -> bool:
-        """市价买入 + 自动止损"""
+    def buy(self, lots: float = None, sl_pips: float = None, tp_pips: float = 0, comment: str = "") -> bool:
+        """市价买入 + 自动止损止盈"""
         lots = lots or config.LOT_SIZE
         sl_pips = sl_pips or config.STOP_LOSS_PIPS
 
-        # 获取当前价格来计算止损
+        # 获取当前价格来计算止损止盈
         account = self.get_account()
         if account and 'bid' in account:
             current_price = account['bid']
             sl_price = round(current_price - sl_pips, 2)
+            tp_price = round(current_price + tp_pips, 2) if tp_pips > 0 else 0
         else:
-            sl_price = 0  # EA会用当前价计算
+            sl_price = 0
+            tp_price = 0
 
         return self.send_order(
             symbol=config.SYMBOL,
             order_type="BUY",
             lots=lots,
             sl=sl_price,
-            tp=0,  # 不设止盈，由策略出场
+            tp=tp_price,
             comment=comment,
             magic=config.MAGIC_NUMBER,
         )
 
-    def sell(self, lots: float = None, sl_pips: float = None, comment: str = "") -> bool:
-        """市价卖出 + 自动止损"""
+    def sell(self, lots: float = None, sl_pips: float = None, tp_pips: float = 0, comment: str = "") -> bool:
+        """市价卖出 + 自动止损止盈"""
         lots = lots or config.LOT_SIZE
         sl_pips = sl_pips or config.STOP_LOSS_PIPS
 
@@ -214,15 +216,17 @@ class MT4Bridge:
         if account and 'ask' in account:
             current_price = account['ask']
             sl_price = round(current_price + sl_pips, 2)
+            tp_price = round(current_price - tp_pips, 2) if tp_pips > 0 else 0
         else:
             sl_price = 0
+            tp_price = 0
 
         return self.send_order(
             symbol=config.SYMBOL,
             order_type="SELL",
             lots=lots,
             sl=sl_price,
-            tp=0,
+            tp=tp_price,
             comment=comment,
             magic=config.MAGIC_NUMBER,
         )

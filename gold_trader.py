@@ -557,8 +557,15 @@ class GoldTrader:
 
             log.info(f"    🚀 {reason}")
 
-            # 止损距离 (优先用信号自带的ATR止损)
+            # 止损/止盈距离 (优先用信号自带的ATR止损止盈)
             sl_pips = sig.get('sl', config.STOP_LOSS_PIPS)
+            tp_pips = sig.get('tp', 0)
+            
+            # M15 RSI策略tp=0(用RSI信号出场)，但MT4仍需要硬止盈保护
+            # 设置安全止盈 = 2×止损距离 (RR 1:2)
+            if tp_pips <= 0:
+                tp_pips = sl_pips * 2
+                log.info(f"    🛡️ 安全止盈: ${tp_pips:.1f} (2×止损, MT4硬保护)")
             
             # ATR自动调仓: 根据止损距离计算手数，保持每笔风险$100
             base_lots = calc_auto_lot_size(0, sl_pips)
@@ -573,12 +580,14 @@ class GoldTrader:
                 success = self.bridge.buy(
                     lots=actual_lots,
                     sl_pips=sl_pips,
+                    tp_pips=tp_pips,
                     comment=f"GOLD_{strategy[:4]}",
                 )
             else:
                 success = self.bridge.sell(
                     lots=actual_lots,
                     sl_pips=sl_pips,
+                    tp_pips=tp_pips,
                     comment=f"GOLD_{strategy[:4]}",
                 )
 
@@ -587,7 +596,8 @@ class GoldTrader:
                     'action': 'OPEN', 'strategy': strategy,
                     'direction': direction,
                     'lots': actual_lots, 'price': close,
-                    'sl_pips': sl_pips, 'reason': reason,
+                    'sl_pips': sl_pips, 'tp_pips': tp_pips,
+                    'reason': reason,
                     'sentiment_score': sentiment_ctx['sentiment']['score'] if sentiment_ctx else None,
                     'lot_multiplier': lot_multiplier,
                     'time': datetime.now().isoformat(),
@@ -596,7 +606,7 @@ class GoldTrader:
                 self.trade_log.append(trade)
                 self._save_trade_log()
 
-                log.info(f"    ✅ 已下单: {actual_lots}手 止损{sl_pips}点")
+                log.info(f"    ✅ 已下单: {actual_lots}手 止损${sl_pips:.1f} 止盈${tp_pips:.1f}")
                 notifier.notify_open(strategy, direction, actual_lots, close, sl_pips, reason)
 
         return entries
