@@ -53,6 +53,12 @@ class GoldTrader:
         self.trade_log = self._load_json(self.log_file, [])
         self.total_pnl = self._load_json(self.pnl_file, {"total_pnl": 0, "trade_count": 0})
         
+        # 冷却期跟踪: {strategy: 上次亏损时间}
+        self.cooldown_until = {}
+        # 日内亏损跟踪
+        self.daily_pnl = 0.0
+        self.daily_date = datetime.now().date()
+        
         # 初始化舆情引擎
         self.sentiment = None
         if SENTIMENT_AVAILABLE:
@@ -164,6 +170,16 @@ class GoldTrader:
                 self.total_pnl['trade_count'] = self.total_pnl.get('trade_count', 0) + 1
                 self._save_pnl()
                 
+                # 更新日内盈亏
+                self._update_daily_pnl(last_profit)
+                
+                # 亏损时设置冷却期
+                if last_profit < 0:
+                    from datetime import timedelta
+                    cooldown_hours = config.COOLDOWN_BARS  # 3小时
+                    self.cooldown_until[strategy] = datetime.now() + timedelta(hours=cooldown_hours)
+                    log.info(f"     ❄️ {strategy} 进入冷却期，{cooldown_hours}小时后才可开仓")
+                
                 # 记录到交易日志
                 trade = {
                     'action': 'CLOSE_DETECTED', 'ticket': int(ticket_key),
@@ -220,6 +236,11 @@ class GoldTrader:
         if self.check_total_loss_limit():
             return {"status": "stopped", "reason": "total_loss_limit"}
 
+        # 日内亏损检查
+        if self._check_daily_loss_limit():
+            log.warning(f"🛑 日内亏损已达 ${self.daily_pnl:.2f}，超过限制 ${config.DAILY_MAX_LOSS}，暂停今日交易")
+            return {"status": "daily_limit", "daily_pnl": self.daily_pnl}
+
         # 获取舆情分析结果
         sentiment_ctx = self._get_sentiment_context()
 
@@ -270,15 +291,28 @@ class GoldTrader:
         else:
             log.info(f"✅ 无操作")
         log.info(f"  总盈亏: ${self.total_pnl.get('total_pnl', 0):.2f} / 上限: -${config.MAX_TOTAL_LOSS}")
-        log.info(f"{'='*60}")
-
-        # 打印舆情摘要
+        log.info(f"  日内盈亏: ${self.daily_pnl:.2f} / 限制: -${config.DAILY_MAX_LOSS}")
+        
+        # 打印ADX和舆情
+        if df_h1 is not None:
+            adx_val = float(df_h1.iloc[-1]['ADX']) if not pd.isna(df_h1.iloc[-1].get('ADX', float('nan'))) else 0
+            atr_val = float(df_h1.iloc[-1]['ATR']) if not pd.isna(df_h1.iloc[-1].get('ATR', float('nan'))) else 0
+            adx_status = '趋势✅' if adx_val >= 25 else '震荡⚠️'
+            log.info(f"  ADX={adx_val:.1f} ({adx_status})  ATR=${atr_val:.2f}  止损=${atr_val*1.5:.2f}")
+        
         if sentiment_ctx:
             s = sentiment_ctx['sentiment']
             m = sentiment_ctx['trade_modifier']
             label_cn = {'BULLISH': '看涨', 'BEARISH': '看跌', 'NEUTRAL': '中性'}
             log.info(f"  🌐 舆情: {label_cn.get(s['label'], s['label'])}({s['score']:.2f}) "
                      f"方向偏好: {m['direction_bias'] or '无'} 仓位系数: {m['lot_multiplier']:.1f}")
+        
+        # 打印冷却期状态
+        if self.cooldown_until:
+            for strat, until in self.cooldown_until.items():
+                remaining = (until - datetime.now()).total_seconds() / 60
+                if remaining > 0:
+                    log.info(f"  ❄️ {strat} 冷却中 (还剩{remaining:.0f}分钟)")
         log.info(f"{'='*60}")
 
         return {"exits": exits, "entries": entries}
@@ -366,6 +400,34 @@ class GoldTrader:
 
         return exits
 
+    def _update_daily_pnl(self, profit: float):
+        """更新日内盈亏跟踪"""
+        today = datetime.now().date()
+        if today != self.daily_date:
+            self.daily_pnl = 0.0
+            self.daily_date = today
+        self.daily_pnl = round(self.daily_pnl + profit, 2)
+
+    def _check_daily_loss_limit(self) -> bool:
+        """检查是否超过日内最大亏损"""
+        today = datetime.now().date()
+        if today != self.daily_date:
+            self.daily_pnl = 0.0
+            self.daily_date = today
+        if self.daily_pnl <= -config.DAILY_MAX_LOSS:
+            return True
+        return False
+
+    def _is_in_cooldown(self, strategy: str) -> bool:
+        """检查策略是否在冷却期"""
+        if strategy in self.cooldown_until:
+            if datetime.now() < self.cooldown_until[strategy]:
+                remaining = (self.cooldown_until[strategy] - datetime.now()).total_seconds() / 60
+                return True
+            else:
+                del self.cooldown_until[strategy]  # 冷却期已过
+        return False
+
     def _get_sentiment_context(self) -> Optional[Dict]:
         """获取舆情分析结果 (失败返回None，不影响交易)"""
         if not self.sentiment:
@@ -427,6 +489,12 @@ class GoldTrader:
             strategy = sig['strategy']
             reason = sig['reason']
             close = sig['close']
+
+            # 冷却期检查: 止损后等待冷却期结束
+            if self._is_in_cooldown(strategy):
+                remaining = (self.cooldown_until[strategy] - datetime.now()).total_seconds() / 60
+                log.info(f"    ❄️ {reason} — 但{strategy}在冷却期中 (还剩{remaining:.0f}分钟)")
+                continue
 
             # 方向冲突检测: 已有持仓时不开反向仓
             direction = sig['signal']  # 'BUY' 或 'SELL'
