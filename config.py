@@ -79,9 +79,9 @@ SIGNAL_CHECK_TIMEFRAME = "MULTI"  # 多时间框架: H1 + M15
 # ============================================================
 # 通知
 # ============================================================
-NOTIFY_METHOD = "console"      # "console" | "telegram"
-# TELEGRAM_BOT_TOKEN = ""
-# TELEGRAM_CHAT_ID = ""
+NOTIFY_METHOD = "telegram"     # "console" | "telegram"
+TELEGRAM_BOT_TOKEN = "8646871612:AAFzMhC_4-rh7_f2E47ankyh45IxFczmVw8"
+TELEGRAM_CHAT_ID = "8531960227"
 
 # ============================================================
 # 路径

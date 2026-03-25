@@ -69,6 +69,14 @@ def main():
     log.info(f"   策略: H1 Keltner(状态机)+MACD+ORB(NY开盘突破) + M15 RSI")
 
     trader = GoldTrader()
+    
+    # Telegram启动通知
+    try:
+        import notifier
+        notifier.notify_system_start()
+    except:
+        pass
+    
     signal_scanned_today = False
     last_date = None
     scan_count = 0
@@ -95,6 +103,10 @@ def main():
                     log.info(f"  📊 总交易笔数: {total_trades}")
                     log.info(f"  🛡️ 止损余量: ${config.MAX_TOTAL_LOSS + current_pnl:.2f}")
                     log.info(f"{'='*60}")
+                    try:
+                        notifier.notify_daily_report(current_pnl, day_pnl, total_trades)
+                    except:
+                        pass
                 
                 signal_scanned_today = False
                 last_date = today

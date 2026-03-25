@@ -23,6 +23,7 @@ import config
 from mt4_bridge import MT4Bridge
 from strategies.signals import (prepare_indicators, scan_all_signals, check_exit_signal,
                                 get_orb_strategy, calc_auto_lot_size)
+import notifier
 
 # 舆情分析模块 (安全导入，失败不影响交易)
 try:
@@ -205,6 +206,7 @@ class GoldTrader:
                 
                 log.info(f"  ⚠️ 检测到 #{ticket_key} ({strategy}) 已被MT4平仓")
                 log.info(f"     估算盈亏: ${last_profit:+.2f} (开仓价: {entry_price})")
+                notifier.notify_close(int(ticket_key), strategy, last_profit, 'MT4自动平仓(止损或手动)')
                 
                 # 更新总盈亏
                 self.total_pnl['total_pnl'] = round(
@@ -285,6 +287,7 @@ class GoldTrader:
             log.warning(f"🚨 日内亏损已达 ${self.daily_pnl:.2f}，超过限制 ${config.DAILY_MAX_LOSS}")
             log.warning(f"🛑 系统停止交易，请复盘后手动重启")
             log.warning(f"{'!'*60}")
+            notifier.notify_stop_review(self.daily_pnl)
             return {"status": "STOP_REVIEW", "daily_pnl": self.daily_pnl}
 
         # 获取舆情分析结果
@@ -594,6 +597,7 @@ class GoldTrader:
                 self._save_trade_log()
 
                 log.info(f"    ✅ 已下单: {actual_lots}手 止损{sl_pips}点")
+                notifier.notify_open(strategy, direction, actual_lots, close, sl_pips, reason)
 
         return entries
 
