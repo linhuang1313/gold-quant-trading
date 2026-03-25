@@ -46,10 +46,10 @@ class MT4Bridge:
         return None
 
     def _write_json(self, filepath: Path, data: Dict):
-        """写入JSON文件"""
+        """写入JSON文件 (紧凑格式, 无空格, 确保EA能正确解析)"""
         try:
             with open(filepath, 'w') as f:
-                json.dump(data, f, indent=2, default=str)
+                json.dump(data, f, separators=(',', ':'), default=str)
         except IOError as e:
             log.error(f"写入 {filepath.name} 失败: {e}")
 
