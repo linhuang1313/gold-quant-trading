@@ -281,8 +281,11 @@ class GoldTrader:
 
         # 日内亏损检查
         if self._check_daily_loss_limit():
-            log.warning(f"🛑 日内亏损已达 ${self.daily_pnl:.2f}，超过限制 ${config.DAILY_MAX_LOSS}，暂停今日交易")
-            return {"status": "daily_limit", "daily_pnl": self.daily_pnl}
+            log.warning(f"\n{'!'*60}")
+            log.warning(f"🚨 日内亏损已达 ${self.daily_pnl:.2f}，超过限制 ${config.DAILY_MAX_LOSS}")
+            log.warning(f"🛑 系统停止交易，请复盘后手动重启")
+            log.warning(f"{'!'*60}")
+            return {"status": "STOP_REVIEW", "daily_pnl": self.daily_pnl}
 
         # 获取舆情分析结果
         sentiment_ctx = self._get_sentiment_context()

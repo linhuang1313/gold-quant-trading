@@ -28,7 +28,7 @@ MAX_POSITIONS = 2         # 最大同时持仓数
 STOP_LOSS_PIPS = 20       # 默认止损距离 ($20 = 0.03手亏$60)
 MAGIC_NUMBER = 20260325   # EA魔术号 (区分手动单和策略单)
 SLIPPAGE = 5              # 最大滑点 (点)
-DAILY_MAX_LOSS = 100      # 单日最大亏损 ($100，达到后暂停当日交易)
+DAILY_MAX_LOSS = 200      # 单日最大亏损 ($200，达到后停止交易，需要复盘后手动重启)
 COOLDOWN_BARS = 3         # 止损后冷却期 (3根H1 K线 = 3小时)
 
 # ── ATR自动调仓 ──

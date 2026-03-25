@@ -128,6 +128,15 @@ def main():
                 log.info(f"\n📊 完整信号扫描 (#{scan_count})")
                 try:
                     result = trader.scan_and_trade()
+                    
+                    # 检查是否触发停止复盘
+                    if result.get('status') == 'STOP_REVIEW':
+                        log.warning("\n" + "=" * 60)
+                        log.warning("🚨 系统已停止 — 日内亏损超限")
+                        log.warning("请复盘后手动重启: python gold_runner.py")
+                        log.warning("=" * 60)
+                        break
+                    
                     entries = result.get('entries', [])
                     exits = result.get('exits', [])
 
