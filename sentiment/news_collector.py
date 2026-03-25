@@ -20,20 +20,29 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # GDELT search keywords grouped by category
 # ---------------------------------------------------------------------------
-# Consolidated queries to minimise GDELT API calls (avoid 429 rate limit)
-# GDELT supports OR queries, so we combine keywords
+# GDELT is unreachable from Singapore — disabled to avoid timeout delays.
+# Set to True to re-enable if network changes.
+GDELT_ENABLED = False
+
 GOLD_QUERY = 'gold price OR gold market OR XAUUSD OR "precious metal"'
 MACRO_QUERY = 'Federal Reserve OR inflation OR "US dollar" OR interest rate'
 TRUMP_QUERY = 'Trump tariff OR Trump gold OR Trump trade war OR Trump economy'
 
-GDELT_DELAY = 2  # seconds between GDELT requests to avoid 429
+GDELT_DELAY = 2
 
 # ---------------------------------------------------------------------------
 # RSS feed URLs (Google News)
 # ---------------------------------------------------------------------------
 RSS_FEEDS = [
-    "https://news.google.com/rss/search?q=gold+price+market&hl=en-US&gl=US&ceid=US:en",
-    "https://news.google.com/rss/search?q=gold+XAUUSD+trading&hl=en-US&gl=US&ceid=US:en",
+    # Gold / precious metals
+    "https://news.google.com/rss/search?q=gold+price+market+when:6h&hl=en-US&gl=US&ceid=US:en",
+    "https://news.google.com/rss/search?q=XAUUSD+gold+trading+when:6h&hl=en-US&gl=US&ceid=US:en",
+    # Macro / Fed / inflation
+    "https://news.google.com/rss/search?q=Federal+Reserve+interest+rate+when:6h&hl=en-US&gl=US&ceid=US:en",
+    "https://news.google.com/rss/search?q=inflation+data+CPI+when:6h&hl=en-US&gl=US&ceid=US:en",
+    # Trump / geopolitical
+    "https://news.google.com/rss/search?q=Trump+tariff+trade+war+when:6h&hl=en-US&gl=US&ceid=US:en",
+    "https://news.google.com/rss/search?q=Trump+economy+policy+when:6h&hl=en-US&gl=US&ceid=US:en",
 ]
 
 # ---------------------------------------------------------------------------
@@ -64,12 +73,13 @@ class NewsCollector:
         """
         articles: List[Dict] = []
 
-        # 1. GDELT — only 2 consolidated queries instead of 9
-        items = self._fetch_gdelt(GOLD_QUERY)
-        articles.extend(items)
-        time.sleep(GDELT_DELAY)
-        items = self._fetch_gdelt(MACRO_QUERY)
-        articles.extend(items)
+        # 1. GDELT (if enabled)
+        if GDELT_ENABLED:
+            items = self._fetch_gdelt(GOLD_QUERY)
+            articles.extend(items)
+            time.sleep(GDELT_DELAY)
+            items = self._fetch_gdelt(MACRO_QUERY)
+            articles.extend(items)
 
         # 2. RSS feeds (backup / supplement)
         for feed_url in RSS_FEEDS:
@@ -85,11 +95,22 @@ class NewsCollector:
         """Collect Trump-related news that may impact gold markets."""
         articles: List[Dict] = []
 
-        # Single consolidated GDELT query
-        items = self._fetch_gdelt(TRUMP_QUERY)
-        for item in items:
-            item["category"] = "trump"
-        articles.extend(items)
+        # GDELT (if enabled)
+        if GDELT_ENABLED:
+            items = self._fetch_gdelt(TRUMP_QUERY)
+            for item in items:
+                item["category"] = "trump"
+            articles.extend(items)
+
+        # Trump RSS (always available)
+        trump_feeds = [
+            f for f in RSS_FEEDS if 'Trump' in f or 'trump' in f
+        ]
+        for feed_url in trump_feeds:
+            items = self._fetch_rss(feed_url)
+            for item in items:
+                item["category"] = "trump"
+            articles.extend(items)
 
         unique = self._deduplicate(articles)
         logger.info(f"[舆情采集] 收集到 {len(unique)} 条特朗普相关新闻")
