@@ -57,7 +57,7 @@ class GoldTrader:
         self.sentiment = None
         if SENTIMENT_AVAILABLE:
             try:
-                self.sentiment = SentimentEngine(cache_ttl=300)
+                self.sentiment = SentimentEngine(update_interval=300)
                 log.info("🌐 舆情分析模块已加载")
             except Exception as e:
                 log.warning(f"舆情模块初始化失败 (不影响交易): {e}")
