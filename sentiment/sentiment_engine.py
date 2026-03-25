@@ -3,9 +3,13 @@ Sentiment engine — main integration point for the sentiment analysis system.
 
 Combines news collection, sentiment analysis, and calendar risk into a single
 trading context that the main trading system can consume.
+
+Uses a background thread to collect and analyze news every N seconds,
+so the main trading loop is never blocked by network I/O.
 """
 
 import logging
+import threading
 import time
 from typing import Dict, Optional
 
@@ -15,44 +19,102 @@ from sentiment.calendar_guard import CalendarGuard
 
 logger = logging.getLogger(__name__)
 
+# Default neutral context returned when no data is available yet
+_NEUTRAL_CONTEXT: Dict = {
+    "sentiment": {"score": 0.0, "label": "NEUTRAL", "confidence": 0.0},
+    "calendar": {"risk_level": "LOW", "pause": False, "pause_reason": "", "next_event": None},
+    "news_summary": "舆情数据采集中...",
+    "trade_modifier": {"allow_trading": True, "direction_bias": None, "lot_multiplier": 1.0},
+}
+
 
 class SentimentEngine:
-    """Unified sentiment engine providing trading context."""
+    """Unified sentiment engine with background collection thread."""
 
-    def __init__(self, cache_ttl: int = 300):
+    def __init__(self, update_interval: int = 300):
         """
         Args:
-            cache_ttl: Cache time-to-live in seconds (default 5 minutes).
+            update_interval: How often (seconds) the background thread refreshes
+                             sentiment data.  Default 300 = 5 minutes.
         """
         self.collector = NewsCollector()
         self.analyzer = SentimentAnalyzer()
         self.calendar = CalendarGuard(news_collector=self.collector)
-        self._cache: Dict = {}
-        self._cache_ts: float = 0.0
-        self._cache_ttl = cache_ttl
+
+        self._update_interval = update_interval
+
+        # Thread-safe result store
+        self._lock = threading.Lock()
+        self._latest: Dict = {}
+        self._latest_ts: float = 0.0
+
+        # Background worker
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(
+            target=self._background_loop, daemon=True, name="SentimentWorker"
+        )
+        self._thread.start()
+        logger.info(f"[舆情引擎] 后台线程已启动，每{update_interval}秒更新一次")
 
     # ------------------------------------------------------------------
-    # Public API
+    # Public API  (called from main trading thread — never blocks on I/O)
     # ------------------------------------------------------------------
 
     def get_trading_context(self) -> Dict:
-        """Get full sentiment-based trading context.
+        """Get the latest sentiment context.  Always returns instantly.
 
-        Returns a dict with keys:
-          - sentiment: score/label/confidence
-          - calendar: risk_level, pause flag, next event
-          - news_summary: short text summary
-          - trade_modifier: allow_trading, direction_bias, lot_multiplier
+        If the background thread hasn't produced its first result yet,
+        a neutral default is returned so trading is not affected.
         """
-        # Return cache if still fresh
-        now = time.time()
-        if self._cache and (now - self._cache_ts) < self._cache_ttl:
-            logger.debug("[舆情引擎] 返回缓存结果")
-            return self._cache
+        with self._lock:
+            if self._latest:
+                return self._latest.copy()
 
+        # First call before background thread finishes — return neutral
+        logger.debug("[舆情引擎] 数据尚未就绪，返回中性默认值")
+        return _NEUTRAL_CONTEXT.copy()
+
+    def invalidate_cache(self):
+        """Force the background thread to refresh on its next cycle."""
+        with self._lock:
+            self._latest = {}
+            self._latest_ts = 0.0
+
+    def stop(self):
+        """Signal the background thread to stop (for clean shutdown)."""
+        self._stop_event.set()
+
+    # ------------------------------------------------------------------
+    # Background worker
+    # ------------------------------------------------------------------
+
+    def _background_loop(self):
+        """Runs in a daemon thread.  Periodically fetches & analyzes news."""
+        # Small initial delay so the main thread can finish setup
+        time.sleep(2)
+
+        while not self._stop_event.is_set():
+            try:
+                result = self._do_full_analysis()
+                with self._lock:
+                    self._latest = result
+                    self._latest_ts = time.time()
+            except Exception as exc:
+                logger.warning(f"[舆情引擎] 后台分析异常: {exc}")
+
+            # Sleep in small increments so we can respond to stop quickly
+            for _ in range(self._update_interval):
+                if self._stop_event.is_set():
+                    break
+                time.sleep(1)
+
+        logger.info("[舆情引擎] 后台线程已退出")
+
+    def _do_full_analysis(self) -> Dict:
+        """Perform one complete analysis cycle.  May take 5-15 seconds."""
         logger.info("[舆情引擎] 开始采集舆情数据...")
 
-        # 1. Calendar risk check (fast, no network needed for calendar)
+        # 1. Calendar risk check (fast, local data)
         calendar_pause, pause_reason = self.calendar.should_pause_trading()
         risk_level = self.calendar.get_risk_level()
         next_event = self.calendar.get_next_event()
@@ -64,7 +126,7 @@ class SentimentEngine:
             "next_event": _format_event(next_event),
         }
 
-        # 2. Collect news
+        # 2. Collect news (network I/O — this is why we run in background)
         headlines = self._collect_all_headlines()
 
         # 3. Sentiment analysis
@@ -89,10 +151,6 @@ class SentimentEngine:
             "trade_modifier": trade_modifier,
         }
 
-        # Update cache
-        self._cache = result
-        self._cache_ts = now
-
         logger.info(
             f"[舆情引擎] 分析完成 — "
             f"情绪: {sentiment['label']}({sentiment['score']:.2f}), "
@@ -103,11 +161,6 @@ class SentimentEngine:
         )
 
         return result
-
-    def invalidate_cache(self):
-        """Force next call to re-collect and re-analyze."""
-        self._cache = {}
-        self._cache_ts = 0.0
 
     # ------------------------------------------------------------------
     # Private helpers
