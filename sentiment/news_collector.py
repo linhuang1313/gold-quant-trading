@@ -20,31 +20,13 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # GDELT search keywords grouped by category
 # ---------------------------------------------------------------------------
-GOLD_KEYWORDS = [
-    "gold price",
-    "gold market",
-    "XAUUSD",
-]
+# Consolidated queries to minimise GDELT API calls (avoid 429 rate limit)
+# GDELT supports OR queries, so we combine keywords
+GOLD_QUERY = 'gold price OR gold market OR XAUUSD OR "precious metal"'
+MACRO_QUERY = 'Federal Reserve OR inflation OR "US dollar" OR interest rate'
+TRUMP_QUERY = 'Trump tariff OR Trump gold OR Trump trade war OR Trump economy'
 
-MACRO_KEYWORDS = [
-    "Federal Reserve interest rate",
-    "inflation data",
-    "US dollar strength",
-]
-
-GEOPOLITICAL_KEYWORDS = [
-    "geopolitical tension",
-    "Trump tariff",
-    "sanctions",
-]
-
-TRUMP_KEYWORDS = [
-    "Trump gold",
-    "Trump tariff",
-    "Trump Federal Reserve",
-    "Trump trade war",
-    "Trump executive order economy",
-]
+GDELT_DELAY = 2  # seconds between GDELT requests to avoid 429
 
 # ---------------------------------------------------------------------------
 # RSS feed URLs (Google News)
@@ -82,11 +64,12 @@ class NewsCollector:
         """
         articles: List[Dict] = []
 
-        # 1. GDELT (primary)
-        all_keywords = GOLD_KEYWORDS + MACRO_KEYWORDS + GEOPOLITICAL_KEYWORDS
-        for kw in all_keywords:
-            items = self._fetch_gdelt(kw)
-            articles.extend(items)
+        # 1. GDELT — only 2 consolidated queries instead of 9
+        items = self._fetch_gdelt(GOLD_QUERY)
+        articles.extend(items)
+        time.sleep(GDELT_DELAY)
+        items = self._fetch_gdelt(MACRO_QUERY)
+        articles.extend(items)
 
         # 2. RSS feeds (backup / supplement)
         for feed_url in RSS_FEEDS:
@@ -94,27 +77,26 @@ class NewsCollector:
             articles.extend(items)
 
         # Deduplicate by title (case-insensitive)
-        seen: set = set()
-        unique: List[Dict] = []
-        for a in articles:
-            key = a["title"].lower().strip()
-            if key not in seen:
-                seen.add(key)
-                unique.append(a)
-
+        unique = self._deduplicate(articles)
         logger.info(f"[舆情采集] 共收集到 {len(unique)} 条去重新闻")
         return unique
 
     def collect_trump_posts(self) -> List[Dict]:
         """Collect Trump-related news that may impact gold markets."""
         articles: List[Dict] = []
-        for kw in TRUMP_KEYWORDS:
-            items = self._fetch_gdelt(kw)
-            for item in items:
-                item["category"] = "trump"
-            articles.extend(items)
 
-        # Deduplicate
+        # Single consolidated GDELT query
+        items = self._fetch_gdelt(TRUMP_QUERY)
+        for item in items:
+            item["category"] = "trump"
+        articles.extend(items)
+
+        unique = self._deduplicate(articles)
+        logger.info(f"[舆情采集] 收集到 {len(unique)} 条特朗普相关新闻")
+        return unique
+
+    @staticmethod
+    def _deduplicate(articles: List[Dict]) -> List[Dict]:
         seen: set = set()
         unique: List[Dict] = []
         for a in articles:
@@ -122,8 +104,6 @@ class NewsCollector:
             if key not in seen:
                 seen.add(key)
                 unique.append(a)
-
-        logger.info(f"[舆情采集] 收集到 {len(unique)} 条特朗普相关新闻")
         return unique
 
     def get_upcoming_events(self) -> List[Dict]:
