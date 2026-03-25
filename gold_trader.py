@@ -23,6 +23,13 @@ import config
 from mt4_bridge import MT4Bridge
 from strategies.signals import prepare_indicators, scan_all_signals, check_exit_signal
 
+# 舆情分析模块 (安全导入，失败不影响交易)
+try:
+    from sentiment import SentimentEngine
+    SENTIMENT_AVAILABLE = True
+except ImportError:
+    SENTIMENT_AVAILABLE = False
+
 # 策略默认止损止盈 (美元)
 STRATEGY_PARAMS = {
     'keltner': {'sl': 20, 'tp': 35, 'max_bars': 15},
@@ -44,6 +51,17 @@ class GoldTrader:
         self.tracking = self._load_json(self.tracking_file, {})
         self.trade_log = self._load_json(self.log_file, [])
         self.total_pnl = self._load_json(self.pnl_file, {"total_pnl": 0, "trade_count": 0})
+        
+        # 初始化舆情引擎
+        self.sentiment = None
+        if SENTIMENT_AVAILABLE:
+            try:
+                self.sentiment = SentimentEngine(cache_ttl=300)
+                log.info("🌐 舆情分析模块已加载")
+            except Exception as e:
+                log.warning(f"舆情模块初始化失败 (不影响交易): {e}")
+        else:
+            log.info("舆情模块未安装，纯技术面交易")
 
     def _load_json(self, path, default):
         if path.exists():
@@ -181,6 +199,16 @@ class GoldTrader:
         if self.check_total_loss_limit():
             return {"status": "stopped", "reason": "total_loss_limit"}
 
+        # 获取舆情分析结果
+        sentiment_ctx = self._get_sentiment_context()
+
+        # 经济日历暂停检查
+        if sentiment_ctx and not sentiment_ctx['trade_modifier']['allow_trading']:
+            pause_reason = sentiment_ctx['calendar'].get('pause_reason', '未知原因')
+            log.info(f"  🛑 舆情避险: {pause_reason}，暂停交易")
+            log.info(f"{'='*60}")
+            return {"status": "paused", "reason": pause_reason}
+
         # 获取多时间框架数据
         df_h1 = self.get_hourly_data()
         df_m5 = self.get_m5_data()
@@ -210,9 +238,9 @@ class GoldTrader:
         # Step 2: 检查新入场信号 (H1 + M5)
         entries = []
         if df_h1 is not None:
-            entries += self._check_entries(df_h1, 'H1')
+            entries += self._check_entries(df_h1, 'H1', sentiment_ctx)
         if df_m5 is not None:
-            entries += self._check_entries(df_m5, 'M5')
+            entries += self._check_entries(df_m5, 'M5', sentiment_ctx)
 
         total = len(exits) + len(entries)
         log.info(f"\n{'='*60}")
@@ -221,6 +249,15 @@ class GoldTrader:
         else:
             log.info(f"✅ 无操作")
         log.info(f"  总盈亏: ${self.total_pnl.get('total_pnl', 0):.2f} / 上限: -${config.MAX_TOTAL_LOSS}")
+        log.info(f"{'='*60}")
+
+        # 打印舆情摘要
+        if sentiment_ctx:
+            s = sentiment_ctx['sentiment']
+            m = sentiment_ctx['trade_modifier']
+            label_cn = {'BULLISH': '看涨', 'BEARISH': '看跌', 'NEUTRAL': '中性'}
+            log.info(f"  🌐 舆情: {label_cn.get(s['label'], s['label'])}({s['score']:.2f}) "
+                     f"方向偏好: {m['direction_bias'] or '无'} 仓位系数: {m['lot_multiplier']:.1f}")
         log.info(f"{'='*60}")
 
         return {"exits": exits, "entries": entries}
@@ -308,6 +345,17 @@ class GoldTrader:
 
         return exits
 
+    def _get_sentiment_context(self) -> Optional[Dict]:
+        """获取舆情分析结果 (失败返回None，不影响交易)"""
+        if not self.sentiment:
+            return None
+        try:
+            ctx = self.sentiment.get_trading_context()
+            return ctx
+        except Exception as e:
+            log.warning(f"舆情分析异常 (不影响交易): {e}")
+            return None
+
     def _get_current_direction(self) -> Optional[str]:
         """获取当前持仓方向 (BUY/SELL/None)"""
         positions = self.get_strategy_positions()
@@ -317,7 +365,8 @@ class GoldTrader:
         pos_type = positions[0].get('type', 0)
         return 'SELL' if pos_type == 1 else 'BUY'
 
-    def _check_entries(self, df: pd.DataFrame, timeframe: str = 'H1') -> List[Dict]:
+    def _check_entries(self, df: pd.DataFrame, timeframe: str = 'H1',
+                        sentiment_ctx: Optional[Dict] = None) -> List[Dict]:
         """检查新入场信号"""
         # 持仓数检查
         current_positions = self.get_strategy_positions()
@@ -327,6 +376,14 @@ class GoldTrader:
 
         # 获取当前持仓方向，防止开反向仓
         current_dir = self._get_current_direction()
+        
+        # 舆情修正参数
+        sentiment_bias = None
+        lot_multiplier = 1.0
+        if sentiment_ctx:
+            modifier = sentiment_ctx.get('trade_modifier', {})
+            sentiment_bias = modifier.get('direction_bias')  # 'BUY'/'SELL'/None
+            lot_multiplier = modifier.get('lot_multiplier', 1.0)
 
         slots = config.MAX_POSITIONS - len(current_positions)
         log.info(f"\n  🔍 信号扫描 (可开 {slots} 笔):")
@@ -356,6 +413,11 @@ class GoldTrader:
                 log.info(f"    ⛔ {reason} — 但当前持仓方向为{current_dir}，跳过反向{direction}信号")
                 continue
 
+            # 舆情方向过滤: 如果舆情有明确偏好且与信号方向相反，跳过
+            if sentiment_bias and direction != sentiment_bias:
+                log.info(f"    🌐 {reason} — 但舆情偏好{sentiment_bias}，跳过反向{direction}信号")
+                continue
+
             log.info(f"    🚀 {reason}")
 
             # 计算止损价
@@ -364,15 +426,21 @@ class GoldTrader:
             # 执行交易 (做多或做空)
             sl_pips = sig.get('sl', config.STOP_LOSS_PIPS)
             
+            # 舆情仓位调整
+            actual_lots = round(config.LOT_SIZE * lot_multiplier, 2)
+            actual_lots = max(actual_lots, 0.01)  # 最小0.01手
+            if lot_multiplier != 1.0:
+                log.info(f"    🌐 舆情仓位调整: {config.LOT_SIZE}手 × {lot_multiplier:.1f} = {actual_lots}手")
+            
             if direction == 'BUY':
                 success = self.bridge.buy(
-                    lots=config.LOT_SIZE,
+                    lots=actual_lots,
                     sl_pips=sl_pips,
                     comment=f"GOLD_{strategy[:4]}",
                 )
             else:
                 success = self.bridge.sell(
-                    lots=config.LOT_SIZE,
+                    lots=actual_lots,
                     sl_pips=sl_pips,
                     comment=f"GOLD_{strategy[:4]}",
                 )
@@ -381,17 +449,17 @@ class GoldTrader:
                 trade = {
                     'action': 'OPEN', 'strategy': strategy,
                     'direction': direction,
-                    'lots': config.LOT_SIZE, 'price': close,
+                    'lots': actual_lots, 'price': close,
                     'sl_pips': sl_pips, 'reason': reason,
+                    'sentiment_score': sentiment_ctx['sentiment']['score'] if sentiment_ctx else None,
+                    'lot_multiplier': lot_multiplier,
                     'time': datetime.now().isoformat(),
                 }
                 entries.append(trade)
                 self.trade_log.append(trade)
                 self._save_trade_log()
 
-                # 记录到tracking (用ticket作为key，但这里还不知道ticket)
-                # EA执行后会更新positions文件，下次扫描时同步
-                log.info(f"    ✅ 已下单: {config.LOT_SIZE}手 止损{sl_pips}点")
+                log.info(f"    ✅ 已下单: {actual_lots}手 止损{sl_pips}点")
 
         return entries
 
