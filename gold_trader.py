@@ -246,7 +246,7 @@ class GoldTrader:
         
         if df_m15 is not None:
             m15_latest = df_m15.iloc[-1]
-            m15_rsi = float(m15_latest['RSI2']) if not pd.isna(m5_latest['RSI2']) else 50
+            m15_rsi = float(m15_latest['RSI2']) if not pd.isna(m15_latest['RSI2']) else 50
             log.info(f"  XAU/USD M15: RSI(2): {m15_rsi:.1f}")
 
         # Step 1: 检查现有持仓出场 (H1和M5都检查)
