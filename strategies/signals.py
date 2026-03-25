@@ -534,17 +534,34 @@ class ORBStrategy:
             self.reset_daily()
 
         # Step 1: 识别NY开盘K线 → 设定区间
-        if self.range_high is None and bar_hour == _cfg.ORB_NY_OPEN_HOUR_UTC:
-            self.range_high = high
-            self.range_low = low
-            self.range_set_date = today
-            self.window_open = True
-            self.window_expiry = _cfg.ORB_EXPIRY_MINUTES // 60  # 剩余有效K线数
+        # 回溯最近3根K线，防止因扫描间隔错过开盘K线
+        if self.range_high is None:
+            for lookback in range(min(3, len(df))):
+                idx = -(lookback + 1)
+                check_bar = df.iloc[idx]
+                check_time = df.index[idx]
+                check_hour = check_time.hour if hasattr(check_time, 'hour') else -1
+                check_date = check_time.date() if hasattr(check_time, 'date') else None
+                
+                if check_hour == _cfg.ORB_NY_OPEN_HOUR_UTC:
+                    self.range_high = float(check_bar['High'])
+                    self.range_low = float(check_bar['Low'])
+                    self.range_set_date = check_date
+                    self.window_open = True
+                    # 窗口有效期减去已过去的K线数
+                    self.window_expiry = max(1, _cfg.ORB_EXPIRY_MINUTES // 60 - lookback)
 
-            range_width = self.range_high - self.range_low
-            log.info(f"  [🇺🇸 ORB] NY开盘区间设定: [{self.range_low:.2f} - {self.range_high:.2f}] "
-                     f"宽度=${range_width:.2f} 窗口{self.window_expiry}根K线")
-            return None  # 设定区间的这根K线不交易
+                    range_width = self.range_high - self.range_low
+                    if lookback > 0:
+                        log.info(f"  [🇺🇸 ORB] 回溯{lookback}根K线找到NY开盘")
+                    log.info(f"  [🇺🇸 ORB] NY开盘区间设定: [{self.range_low:.2f} - {self.range_high:.2f}] "
+                             f"宽度=${range_width:.2f} 窗口{self.window_expiry}根K线")
+                    
+                    # 如果是回溯找到的，当前K线已经是后续K线，直接检查突破
+                    if lookback > 0:
+                        break  # 跳出循环，下面Step 2会检查突破
+                    return None  # 开盘K线本身不交易
+                    break
 
         # Step 2: 检查突破
         if self.window_open and self.range_high is not None and not self.traded_today:
