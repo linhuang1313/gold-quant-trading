@@ -1,10 +1,13 @@
 """
-黄金交易信号引擎
-================
-基于COMEX黄金期货(GC=F)真实价格数据回测，选择Sharpe最高的3种:
-1. 布林带均值回归 (Sharpe 2.21, 胜率75%, 回撤-8.9%)
-2. 窄幅突破 (Sharpe 1.27, 胜率43.2%, 盈亏比高)
-3. ATR收缩突破 (Sharpe 1.19, 胜率43%, 总盈亏最高)
+黄金盘中量化交易信号引擎
+========================
+基于11年XAU/USD H1真实数据(Dukascopy) + 特朗普时期分段验证
+
+策略组合:
+1. Keltner通道突破 (全周期Sharpe 0.92, 特朗普2年化+51.7%)
+2. MACD+SMA50趋势 (全周期Sharpe 1.14, 特朗普2年化+24.7%, 回撤仅-4.5%)
+
+两个策略都支持做多+做空，双向捕捉趋势
 """
 import numpy as np
 import pandas as pd
@@ -13,7 +16,6 @@ from datetime import datetime
 
 
 def calc_rsi(series: pd.Series, period: int = 2) -> pd.Series:
-    """Wilder RSI"""
     delta = series.diff()
     gain = delta.where(delta > 0, 0.0)
     loss = -delta.where(delta < 0, 0.0)
@@ -26,175 +28,172 @@ def calc_rsi(series: pd.Series, period: int = 2) -> pd.Series:
 def prepare_indicators(df: pd.DataFrame) -> pd.DataFrame:
     """计算所有技术指标"""
     df = df.copy()
-    df['RSI2'] = calc_rsi(df['Close'], 2)
-    df['SMA200'] = df['Close'].rolling(200).mean()
+    
+    # 均线
     df['SMA50'] = df['Close'].rolling(50).mean()
-    df['SMA20'] = df['Close'].rolling(20).mean()
-    df['SMA10'] = df['Close'].rolling(10).mean()
-    df['SMA5'] = df['Close'].rolling(5).mean()
-
-    # 布林带
-    df['BB_mid'] = df['Close'].rolling(20).mean()
-    df['BB_std'] = df['Close'].rolling(20).std()
-    df['BB_lower'] = df['BB_mid'] - 2 * df['BB_std']
-    df['BB_upper'] = df['BB_mid'] + 2 * df['BB_std']
-
-    # ATR & Range
+    df['SMA200'] = df['Close'].rolling(200).mean()
+    df['EMA9'] = df['Close'].ewm(span=9).mean()
+    df['EMA12'] = df['Close'].ewm(span=12).mean()
+    df['EMA21'] = df['Close'].ewm(span=21).mean()
+    df['EMA26'] = df['Close'].ewm(span=26).mean()
+    
+    # Keltner Channel (EMA20 ± 1.5*ATR)
     df['ATR'] = (df['High'] - df['Low']).rolling(14).mean()
-    df['ATR_min50'] = df['ATR'].rolling(50).min()
-    df['Range'] = (df['High'] - df['Low']) / df['Close'] * 100
-    df['Range_avg'] = df['Range'].rolling(10).mean()
-
-    # 前N日高点
-    df['High5'] = df['High'].rolling(5).max().shift(1)
-
+    df['KC_mid'] = df['Close'].ewm(span=20).mean()
+    df['KC_upper'] = df['KC_mid'] + 1.5 * df['ATR']
+    df['KC_lower'] = df['KC_mid'] - 1.5 * df['ATR']
+    
+    # MACD
+    df['MACD'] = df['EMA12'] - df['EMA26']
+    df['MACD_signal'] = df['MACD'].ewm(span=9).mean()
+    df['MACD_hist'] = df['MACD'] - df['MACD_signal']
+    
+    # RSI (用于辅助监控)
+    df['RSI2'] = calc_rsi(df['Close'], 2)
+    df['RSI14'] = calc_rsi(df['Close'], 14)
+    
     return df
 
 
-def check_bollinger_signal(df: pd.DataFrame) -> Optional[Dict]:
+def check_keltner_signal(df: pd.DataFrame) -> Optional[Dict]:
     """
-    布林带均值回归信号
-    回测: Sharpe 2.56, 胜率 77.3%, 回撤 -8.2%
-
-    入场: MA200上方 + 收盘跌破布林带下轨
-    出场: 收盘回到布林带中轨
+    Keltner通道突破信号
+    回测: 11年Sharpe 0.92, 年均260笔, 特朗普2期年化+51.7%
+    
+    做多: 价格突破上轨 + 价格>SMA50
+    做空: 价格跌破下轨 + 价格<SMA50
+    止损$20, 止盈$35
     """
-    if len(df) < 201:
+    if len(df) < 55:
         return None
-
+    
     latest = df.iloc[-1]
     close = float(latest['Close'])
-    sma200 = float(latest['SMA200'])
-    bb_lower = float(latest['BB_lower'])
-    bb_mid = float(latest['BB_mid'])
-
-    if pd.isna(sma200) or pd.isna(bb_lower):
+    kc_upper = float(latest['KC_upper'])
+    kc_lower = float(latest['KC_lower'])
+    sma50 = float(latest['SMA50'])
+    
+    if pd.isna(kc_upper) or pd.isna(sma50):
         return None
-
-    # 入场信号
-    if close > sma200 and close < bb_lower:
+    
+    # 做多: 突破上轨
+    if close > kc_upper and close > sma50:
         return {
-            'strategy': 'bollinger',
+            'strategy': 'keltner',
             'signal': 'BUY',
-            'reason': f"布林带买入: 价格{close:.2f} < 下轨{bb_lower:.2f}",
+            'reason': f"Keltner做多: 价格{close:.2f} > 上轨{kc_upper:.2f}",
             'close': close,
-            'bb_lower': bb_lower,
-            'bb_mid': bb_mid,
+            'sl': 20,
+            'tp': 35,
         }
-
+    
+    # 做空: 跌破下轨
+    if close < kc_lower and close < sma50:
+        return {
+            'strategy': 'keltner',
+            'signal': 'SELL',
+            'reason': f"Keltner做空: 价格{close:.2f} < 下轨{kc_lower:.2f}",
+            'close': close,
+            'sl': 20,
+            'tp': 35,
+        }
+    
     return None
 
 
-def check_atr_squeeze_signal(df: pd.DataFrame) -> Optional[Dict]:
+def check_macd_signal(df: pd.DataFrame) -> Optional[Dict]:
     """
-    ATR收缩突破信号
-    回测(GC=F): Sharpe 1.19, 胜率43%, 均收+$21.8/笔, 总盈亏+$1,722
-
-    入场: MA200上方 + ATR低于近50日最低值的1.3倍(波动率收缩) + 突破前5日高点
-    出场: 收盘跌破MA10
+    MACD+SMA50趋势信号
+    回测: 11年Sharpe 1.14, 年均123笔, 回撤仅-4.8%, 盈亏比2.46
+    特朗普2期年化+24.7%
+    
+    做多: MACD柱状图由负转正 + 价格>SMA50
+    做空: MACD柱状图由正转负 + 价格<SMA50
+    止损$20, 止盈$50
     """
-    if len(df) < 201:
+    if len(df) < 30:
         return None
-
+    
     latest = df.iloc[-1]
+    prev = df.iloc[-2]
+    
     close = float(latest['Close'])
-    sma200 = float(latest['SMA200'])
-    atr = float(latest['ATR'])
-    atr_min = float(latest['ATR_min50'])
-    high5 = float(latest['High5'])
-
-    if pd.isna(sma200) or pd.isna(atr) or pd.isna(atr_min) or pd.isna(high5):
+    macd_hist = float(latest['MACD_hist'])
+    macd_hist_prev = float(prev['MACD_hist'])
+    sma50 = float(latest['SMA50'])
+    
+    if pd.isna(macd_hist) or pd.isna(macd_hist_prev) or pd.isna(sma50):
         return None
-
-    squeeze = atr < atr_min * 1.3 if atr_min > 0 else False
-
-    if close > sma200 and squeeze and close > high5:
+    
+    # 做多: MACD柱由负转正 + 价格在SMA50上方
+    if macd_hist > 0 and macd_hist_prev <= 0 and close > sma50:
         return {
-            'strategy': 'atr_squeeze',
+            'strategy': 'macd',
             'signal': 'BUY',
-            'reason': f"ATR收缩突破: ATR={atr:.1f} < 阈值{atr_min*1.3:.1f}, 破前高{high5:.2f}",
+            'reason': f"MACD做多: 柱状图转正, 价格{close:.2f} > SMA50",
             'close': close,
-            'atr': atr,
+            'sl': 20,
+            'tp': 50,
         }
-
+    
+    # 做空: MACD柱由正转负 + 价格在SMA50下方
+    if macd_hist < 0 and macd_hist_prev >= 0 and close < sma50:
+        return {
+            'strategy': 'macd',
+            'signal': 'SELL',
+            'reason': f"MACD做空: 柱状图转负, 价格{close:.2f} < SMA50",
+            'close': close,
+            'sl': 20,
+            'tp': 50,
+        }
+    
     return None
 
 
-def check_range_breakout_signal(df: pd.DataFrame) -> Optional[Dict]:
-    """
-    窄幅突破信号
-    回测: Sharpe 1.53, 胜率 42.6%, 盈亏比 3.02, 回撤 -9.0%
-
-    入场: MA200上方 + 今日波幅<平均60% + 收盘突破前5日高点
-    出场: 收盘跌破MA10
-    """
-    if len(df) < 201:
-        return None
-
-    latest = df.iloc[-1]
-    close = float(latest['Close'])
-    sma200 = float(latest['SMA200'])
-    rng = float(latest['Range'])
-    rng_avg = float(latest['Range_avg'])
-    high5 = float(latest['High5'])
-
-    if pd.isna(sma200) or pd.isna(rng_avg) or pd.isna(high5):
-        return None
-
-    if close > sma200 and rng < rng_avg * 0.6 and close > high5:
-        return {
-            'strategy': 'range_breakout',
-            'signal': 'BUY',
-            'reason': f"窄幅突破: 波幅{rng:.2f}%<均值{rng_avg:.2f}%×60%, 破前高{high5:.2f}",
-            'close': close,
-        }
-
-    return None
-
-
-def check_exit_signal(df: pd.DataFrame, strategy: str) -> Optional[str]:
+def check_exit_signal(df: pd.DataFrame, strategy: str, direction: str) -> Optional[str]:
     """
     检查出场信号
-
-    布林带: 价格 > BB中轨
-    窄幅突破/ATR收缩: 价格 < MA10 (跌破)
+    
+    Keltner: 价格回到通道内 (反向突破)
+    MACD: MACD柱状图反向
     """
-    if len(df) < 20:
+    if len(df) < 5:
         return None
-
+    
     latest = df.iloc[-1]
+    prev = df.iloc[-2]
     close = float(latest['Close'])
-
-    if strategy == 'bollinger':
-        bb_mid = float(latest['BB_mid'])
-        if not pd.isna(bb_mid) and close > bb_mid:
-            return f"布林带出场: 价格{close:.2f} > 中轨{bb_mid:.2f}"
-
-    elif strategy in ('range_breakout', 'atr_squeeze'):
-        sma10 = float(latest['SMA10'])
-        if not pd.isna(sma10) and close < sma10:
-            return f"突破出场: 价格{close:.2f} < MA10 {sma10:.2f}"
-
+    
+    if strategy == 'keltner':
+        kc_mid = float(latest['KC_mid'])
+        if not pd.isna(kc_mid):
+            if direction == 'BUY' and close < kc_mid:
+                return f"Keltner多头出场: 价格{close:.2f} < 中轨{kc_mid:.2f}"
+            elif direction == 'SELL' and close > kc_mid:
+                return f"Keltner空头出场: 价格{close:.2f} > 中轨{kc_mid:.2f}"
+    
+    elif strategy == 'macd':
+        macd_hist = float(latest['MACD_hist'])
+        macd_hist_prev = float(prev['MACD_hist'])
+        if not pd.isna(macd_hist):
+            if direction == 'BUY' and macd_hist < 0 and macd_hist_prev >= 0:
+                return f"MACD多头出场: 柱状图转负"
+            elif direction == 'SELL' and macd_hist > 0 and macd_hist_prev <= 0:
+                return f"MACD空头出场: 柱状图转正"
+    
     return None
 
 
 def scan_all_signals(df: pd.DataFrame) -> List[Dict]:
     """扫描所有策略信号"""
     signals = []
-
-    # 布林带
-    sig = check_bollinger_signal(df)
+    
+    sig = check_keltner_signal(df)
     if sig:
         signals.append(sig)
-
-    # ATR收缩突破
-    sig = check_atr_squeeze_signal(df)
+    
+    sig = check_macd_signal(df)
     if sig:
         signals.append(sig)
-
-    # 窄幅突破
-    sig = check_range_breakout_signal(df)
-    if sig:
-        signals.append(sig)
-
+    
     return signals

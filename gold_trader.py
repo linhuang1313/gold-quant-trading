@@ -23,6 +23,12 @@ import config
 from mt4_bridge import MT4Bridge
 from strategies.signals import prepare_indicators, scan_all_signals, check_exit_signal
 
+# 策略默认止损止盈 (美元)
+STRATEGY_PARAMS = {
+    'keltner': {'sl': 20, 'tp': 35, 'max_bars': 15},
+    'macd': {'sl': 20, 'tp': 50, 'max_bars': 20},
+}
+
 log = logging.getLogger(__name__)
 
 
@@ -62,15 +68,15 @@ class GoldTrader:
 
     # ── 数据获取 ──
 
-    def get_daily_data(self) -> Optional[pd.DataFrame]:
-        """获取黄金日线数据 (COMEX黄金期货GC=F，与XAU/USD价格一致)"""
+    def get_hourly_data(self) -> Optional[pd.DataFrame]:
+        """获取黄金H1数据 (COMEX黄金期货GC=F)"""
         try:
-            df = yf.download('GC=F', period='300d', progress=False)
+            df = yf.download('GC=F', period='60d', interval='1h', progress=False)
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
             df = df.dropna(subset=['Close'])
-            if len(df) < 201:
-                log.warning("GLD数据不足201天")
+            if len(df) < 55:
+                log.warning("黄金H1数据不足55根K线")
                 return None
             return prepare_indicators(df)
         except Exception as e:
@@ -105,15 +111,17 @@ class GoldTrader:
         if self.check_total_loss_limit():
             return {"status": "stopped", "reason": "total_loss_limit"}
 
-        # 获取日线数据
-        df = self.get_daily_data()
+        # 获取H1数据
+        df = self.get_hourly_data()
         if df is None:
             return {"status": "error", "reason": "no_data"}
 
         latest = df.iloc[-1]
         close = float(latest['Close'])
         rsi2 = float(latest['RSI2']) if not pd.isna(latest['RSI2']) else 0
-        log.info(f"  GLD 最新: ${close:.2f}  RSI(2): {rsi2:.1f}")
+        rsi14 = float(latest['RSI14']) if not pd.isna(latest['RSI14']) else 50
+        macd_h = float(latest['MACD_hist']) if not pd.isna(latest['MACD_hist']) else 0
+        log.info(f"  XAU/USD: ${close:.2f}  RSI(14): {rsi14:.1f}  MACD: {macd_h:+.2f}")
 
         # Step 1: 检查现有持仓出场
         exits = self._check_exits(df)
@@ -173,7 +181,7 @@ class GoldTrader:
             reason = None
 
             # 1. 策略出场信号
-            exit_sig = check_exit_signal(df, strategy)
+            exit_sig = check_exit_signal(df, strategy, direction)
             if exit_sig:
                 reason = exit_sig
 
@@ -182,7 +190,9 @@ class GoldTrader:
             if not reason and hold_days >= max_hold:
                 reason = f"⏰ 时间止损: {hold_days}天 >= {max_hold}天"
 
-            # 注意: 硬止损由MT4的SL单自动处理，这里不需要检查
+            # 硬止损由MT4的SL单自动处理
+            # 策略出场信号需要知道方向
+            direction = track.get('direction', 'BUY')
 
             if reason:
                 log.info(f"      → {reason}")
@@ -251,16 +261,27 @@ class GoldTrader:
             # 计算止损价
             sl_pips = config.STRATEGIES.get(strategy, {}).get('stop_loss', config.STOP_LOSS_PIPS)
 
-            # 执行买入
-            success = self.bridge.buy(
-                lots=config.LOT_SIZE,
-                sl_pips=sl_pips,
-                comment=f"GOLD_{strategy[:4]}",
-            )
+            # 执行交易 (做多或做空)
+            direction = sig['signal']  # 'BUY' 或 'SELL'
+            sl_pips = sig.get('sl', config.STOP_LOSS_PIPS)
+            
+            if direction == 'BUY':
+                success = self.bridge.buy(
+                    lots=config.LOT_SIZE,
+                    sl_pips=sl_pips,
+                    comment=f"GOLD_{strategy[:4]}",
+                )
+            else:
+                success = self.bridge.sell(
+                    lots=config.LOT_SIZE,
+                    sl_pips=sl_pips,
+                    comment=f"GOLD_{strategy[:4]}",
+                )
 
             if success:
                 trade = {
                     'action': 'OPEN', 'strategy': strategy,
+                    'direction': direction,
                     'lots': config.LOT_SIZE, 'price': close,
                     'sl_pips': sl_pips, 'reason': reason,
                     'time': datetime.now().isoformat(),

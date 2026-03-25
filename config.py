@@ -21,7 +21,7 @@ BRIDGE_DIR = Path(METATRADER_DIR_PATH) / "MQL4" / "Files" / "DWX"
 SYMBOL = "XAUUSD.mx"      # EMX Pro Limited 的黄金品种名称
 CAPITAL = 3000            # 本金 (USD)
 MAX_TOTAL_LOSS = 1500     # 最大总亏损 (USD)，达到后停止交易
-LOT_SIZE = 0.01           # 手数 (0.01手 = 1盎司 = $1/点)
+LOT_SIZE = 0.03           # 手数 (0.03手 = 3盎司 = $3/点) — 先用模拟盘验证，确认后可加0.05
 MAX_POSITIONS = 2         # 最大同时持仓数
 STOP_LOSS_PIPS = 50       # 止损距离 (点/$)
 MAGIC_NUMBER = 20260325   # EA魔术号 (区分手动单和策略单)
@@ -31,38 +31,25 @@ SLIPPAGE = 5              # 最大滑点 (点)
 # 策略参数
 # ============================================================
 STRATEGIES = {
-    "bollinger": {
+    "keltner": {
         "enabled": True,
-        "name": "布林带均值回归",
-        "bb_period": 20,
-        "bb_std": 2.0,
-        "ma_trend": 200,
-        "exit_target": "bb_mid",
-        "stop_loss": 50,
+        "name": "Keltner通道突破",
+        "stop_loss": 20,
+        "take_profit": 35,
         "max_hold_bars": 15,
-        # GC=F回测: Sharpe 2.21, 胜率75%, 均收+$9.6/笔, 回撤-8.9%
+        # 11年回测: Sharpe 0.92, 年均260笔, 胜率49%
+        # 特朗普2: 年化+51.7%, 回撤-17.5%
+        # 支持做多+做空
     },
-    "range_breakout": {
+    "macd": {
         "enabled": True,
-        "name": "窄幅突破",
-        "range_pct": 0.6,
-        "lookback": 5,
-        "ma_trend": 200,
-        "ma_exit": 10,
-        "stop_loss": 50,
-        "max_hold_bars": 15,
-        # GC=F回测: Sharpe 1.27, 胜率43.2%, 均收+$13.6/笔, 回撤-9.9%
-    },
-    "atr_squeeze": {
-        "enabled": True,
-        "name": "ATR收缩突破",
-        "atr_squeeze_mult": 1.3,   # ATR < 近50日最低值×1.3
-        "lookback": 5,
-        "ma_trend": 200,
-        "ma_exit": 10,
-        "stop_loss": 50,
-        "max_hold_bars": 15,
-        # GC=F回测: Sharpe 1.19, 胜率43%, 均收+$21.8/笔, 回撤-20%
+        "name": "MACD+SMA50趋势",
+        "stop_loss": 20,
+        "take_profit": 50,
+        "max_hold_bars": 20,
+        # 11年回测: Sharpe 1.14, 年均123笔, 盈亏比2.46
+        # 特朗普2: 年化+24.7%, 回撤仅-4.5%
+        # 支持做多+做空
     },
 }
 
