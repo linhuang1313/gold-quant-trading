@@ -107,12 +107,75 @@ class GoldTrader:
 
     # ── 核心交易逻辑 ──
 
+    def _sync_positions_tracking(self):
+        """同步MT4持仓与tracking记录
+        1. 新开仓单自动补录tracking
+        2. 已平仓单(止损/手动)自动检测并记录
+        """
+        mt4_positions = self.get_strategy_positions()
+        mt4_tickets = {str(p['ticket']) for p in mt4_positions}
+        
+        # 1. 检测已消失的持仓 (被MT4止损/手动平仓)
+        tracked_tickets = list(self.tracking.keys())
+        for ticket_key in tracked_tickets:
+            if ticket_key not in mt4_tickets:
+                track = self.tracking[ticket_key]
+                strategy = track.get('strategy', 'unknown')
+                direction = track.get('direction', 'BUY')
+                entry_price = track.get('entry_price', 0)
+                
+                log.info(f"  ⚠️ 检测到 #{ticket_key} ({strategy}) 已被MT4平仓 (可能触发止损)")
+                
+                # 记录到交易日志
+                trade = {
+                    'action': 'CLOSE_DETECTED', 'ticket': int(ticket_key),
+                    'strategy': strategy, 'direction': direction,
+                    'entry_price': entry_price,
+                    'reason': '🚨 MT4自动平仓 (止损或手动)',
+                    'time': datetime.now().isoformat(),
+                }
+                self.trade_log.append(trade)
+                self._save_trade_log()
+                
+                del self.tracking[ticket_key]
+                self._save_tracking()
+        
+        # 2. 检测未tracking的新仓位 (开仓后ticket未同步)
+        for pos in mt4_positions:
+            ticket_key = str(pos['ticket'])
+            if ticket_key not in self.tracking:
+                # 从comment推断策略
+                comment = pos.get('comment', '')
+                strategy = 'unknown'
+                if 'kelt' in comment.lower():
+                    strategy = 'keltner'
+                elif 'macd' in comment.lower():
+                    strategy = 'macd'
+                elif 'rsi' in comment.lower() or 'm5_r' in comment.lower():
+                    strategy = 'm5_rsi'
+                
+                direction = 'SELL' if pos.get('type', 0) == 1 else 'BUY'
+                
+                self.tracking[ticket_key] = {
+                    'strategy': strategy,
+                    'direction': direction,
+                    'entry_price': pos.get('open_price', 0),
+                    'entry_date': pos.get('open_time', datetime.now().isoformat()),
+                    'lots': pos.get('lots', 0),
+                    'sl': pos.get('sl', 0),
+                }
+                self._save_tracking()
+                log.info(f"  📝 同步新仓位: #{ticket_key} {strategy} {direction} @ {pos.get('open_price', 0)}")
+
     def scan_and_trade(self) -> Dict:
         """完整扫描+交易流程"""
         now = datetime.now()
         log.info(f"\n{'='*60}")
         log.info(f"📊 黄金量化交易 — {now.strftime('%Y-%m-%d %H:%M:%S')}")
         log.info(f"{'='*60}")
+
+        # 同步MT4持仓状态
+        self._sync_positions_tracking()
 
         # 总亏损检查
         if self.check_total_loss_limit():
@@ -334,6 +397,9 @@ class GoldTrader:
 
     def check_exits_only(self) -> Dict:
         """仅检查出场 (盘中监控, H1+M5双时间框架)"""
+        # 先同步持仓状态，检测止损/手动平仓
+        self._sync_positions_tracking()
+        
         exits = []
         df_h1 = self.get_hourly_data()
         if df_h1 is not None:

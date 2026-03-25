@@ -1,0 +1,11 @@
+# Core dependencies
+numpy
+pandas
+yfinance
+
+# Sentiment analysis module
+transformers
+torch
+nltk
+feedparser
+requests
