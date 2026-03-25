@@ -82,7 +82,7 @@ def prepare_indicators(df: pd.DataFrame) -> pd.DataFrame:
 # ═══════════════════════════════════════════════════════════════
 # 常量
 # ═══════════════════════════════════════════════════════════════
-ADX_TREND_THRESHOLD = 25
+ADX_TREND_THRESHOLD = 24    # 回测最优: Sharpe 0.60 (25→0.52, 23→0.45)
 ATR_SL_MULTIPLIER = 2.5     # v3: 改为2.5×ATR (backtrader项目实测值)
 ATR_SL_MIN = 10
 ATR_SL_MAX = 50
