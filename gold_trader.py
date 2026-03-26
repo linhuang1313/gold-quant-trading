@@ -267,15 +267,21 @@ class GoldTrader:
         for pos in mt4_positions:
             ticket_key = str(pos['ticket'])
             if ticket_key not in self.tracking:
-                # 从comment推断策略
+                # 从comment推断策略 (comment格式: GOLD_kelt / GOLD_orb / GOLD_m15_)
                 comment = pos.get('comment', '')
                 strategy = 'unknown'
-                if 'kelt' in comment.lower():
+                cl = comment.lower()
+                if 'kelt' in cl:
                     strategy = 'keltner'
-                elif 'macd' in comment.lower():
+                elif 'orb' in cl:
+                    strategy = 'orb'
+                elif 'macd' in cl:
                     strategy = 'macd'
-                elif 'rsi' in comment.lower() or 'm15_r' in comment.lower():
+                elif 'rsi' in cl or 'm15' in cl:
                     strategy = 'm15_rsi'
+                
+                if strategy == 'unknown':
+                    log.warning(f"  ⚠️ 无法识别策略: ticket={ticket_key} comment='{comment}'")
                 
                 direction = 'SELL' if pos.get('type', 0) == 1 else 'BUY'
                 
