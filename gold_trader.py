@@ -59,6 +59,7 @@ class GoldTrader:
         self.cooldown_until = {}
         # 日内亏损跟踪
         self.daily_pnl = 0.0
+        self.daily_loss_count = 0     # 当日亏损笔数
         self.daily_date = datetime.now().date()
         
         # 初始化舆情引擎
@@ -284,11 +285,11 @@ class GoldTrader:
         # 日内亏损检查
         if self._check_daily_loss_limit():
             log.warning(f"\n{'!'*60}")
-            log.warning(f"🚨 日内亏损已达 ${self.daily_pnl:.2f}，超过限制 ${config.DAILY_MAX_LOSS}")
-            log.warning(f"🛑 系统停止交易，请复盘后手动重启")
+            log.warning(f"🚨 日内亏损{self.daily_loss_count}笔 (上限{config.DAILY_MAX_LOSSES}笔) | 日内PnL: ${self.daily_pnl:.2f}")
+            log.warning(f"🛑 系统停止交易，明日自动恢复")
             log.warning(f"{'!'*60}")
             notifier.notify_stop_review(self.daily_pnl)
-            return {"status": "STOP_REVIEW", "daily_pnl": self.daily_pnl}
+            return {"status": "STOP_REVIEW", "daily_pnl": self.daily_pnl, "daily_losses": self.daily_loss_count}
 
         # 获取舆情分析结果
         sentiment_ctx = self._get_sentiment_context()
@@ -340,7 +341,7 @@ class GoldTrader:
         else:
             log.info(f"✅ 无操作")
         log.info(f"  总盈亏: ${self.total_pnl.get('total_pnl', 0):.2f} / 上限: -${config.MAX_TOTAL_LOSS}")
-        log.info(f"  日内盈亏: ${self.daily_pnl:.2f} / 限制: -${config.DAILY_MAX_LOSS}")
+        log.info(f"  日内盈亏: ${self.daily_pnl:.2f} | 亏损{self.daily_loss_count}/{config.DAILY_MAX_LOSSES}笔")
         
         # 打印ADX和舆情
         if df_h1 is not None:
@@ -456,15 +457,24 @@ class GoldTrader:
         today = datetime.now().date()
         if today != self.daily_date:
             self.daily_pnl = 0.0
+            self.daily_loss_count = 0
             self.daily_date = today
         self.daily_pnl = round(self.daily_pnl + profit, 2)
+        if profit < 0:
+            self.daily_loss_count += 1
+            log.info(f"     📊 日内亏损第{self.daily_loss_count}笔 (上限{config.DAILY_MAX_LOSSES}笔)")
 
     def _check_daily_loss_limit(self) -> bool:
-        """检查是否超过日内最大亏损"""
+        """检查是否超过日内最大亏损笔数"""
         today = datetime.now().date()
         if today != self.daily_date:
             self.daily_pnl = 0.0
+            self.daily_loss_count = 0
             self.daily_date = today
+        # 笔数限制 (主要控制)
+        if self.daily_loss_count >= config.DAILY_MAX_LOSSES:
+            return True
+        # 金额限制 (极端保护)
         if self.daily_pnl <= -config.DAILY_MAX_LOSS:
             return True
         return False
