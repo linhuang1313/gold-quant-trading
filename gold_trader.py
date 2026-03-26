@@ -55,6 +55,10 @@ class GoldTrader:
         self.trade_log = self._load_json(self.log_file, [])
         self.total_pnl = self._load_json(self.pnl_file, {"total_pnl": 0, "trade_count": 0})
         
+        # 错失信号记录
+        self.missed_signals_file = config.DATA_DIR / "gold_missed_signals.json"
+        self.missed_signals = self._load_json(self.missed_signals_file, [])
+        
         # 冷却期跟踪: {strategy: 上次亏损时间}
         self.cooldown_until = {}
         # 日内亏损跟踪
@@ -91,6 +95,24 @@ class GoldTrader:
 
     def _save_trade_log(self):
         self._save_json(self.log_file, self.trade_log)
+
+    def _log_missed_signal(self, sig: Dict, filter_reason: str):
+        """记录被过滤的信号，用于复盘分析机会成本"""
+        record = {
+            'time': datetime.now().isoformat(),
+            'strategy': sig.get('strategy', ''),
+            'direction': sig.get('signal', ''),
+            'price': sig.get('close', 0),
+            'reason': sig.get('reason', ''),
+            'sl': sig.get('sl', 0),
+            'tp': sig.get('tp', 0),
+            'filter_reason': filter_reason,
+        }
+        self.missed_signals.append(record)
+        # 只保留最近500条
+        if len(self.missed_signals) > 500:
+            self.missed_signals = self.missed_signals[-500:]
+        self._save_json(self.missed_signals_file, self.missed_signals)
 
     def _save_pnl(self):
         self._save_json(self.pnl_file, self.total_pnl)
@@ -515,7 +537,14 @@ class GoldTrader:
         # 持仓数检查
         current_positions = self.get_strategy_positions()
         if len(current_positions) >= config.MAX_POSITIONS:
-            log.info(f"\n  📊 已持有 {len(current_positions)}/{config.MAX_POSITIONS} 笔，不再开仓")
+            # 仍然扫描信号，记录错失的机会
+            _missed_signals = scan_all_signals(df, timeframe)
+            for _ms in _missed_signals:
+                self._log_missed_signal(_ms, f"持仓已满({len(current_positions)}/{config.MAX_POSITIONS})")
+            if _missed_signals:
+                log.info(f"\n  📊 已持有 {len(current_positions)}/{config.MAX_POSITIONS} 笔，不再开仓 (错失{len(_missed_signals)}个信号)")
+            else:
+                log.info(f"\n  📊 已持有 {len(current_positions)}/{config.MAX_POSITIONS} 笔，不再开仓")
             return []
 
         # 获取当前持仓方向，防止开反向仓
@@ -552,6 +581,7 @@ class GoldTrader:
             if self._is_in_cooldown(strategy):
                 remaining = (self.cooldown_until[strategy] - datetime.now()).total_seconds() / 60
                 log.info(f"    ❄️ {reason} — 但{strategy}在冷却期中 (还剩{remaining:.0f}分钟)")
+                self._log_missed_signal(sig, f"冷却期(还剩{remaining:.0f}分钟)")
                 continue
 
             # 同策略重复持仓检测: 同一策略已有持仓时不再开新仓
@@ -560,12 +590,14 @@ class GoldTrader:
                 active_strategies.add(track.get('strategy', ''))
             if strategy in active_strategies:
                 log.info(f"    🚫 {reason} — 但{strategy}已有持仓，不重复开仓")
+                self._log_missed_signal(sig, f"同策略已持仓({strategy})")
                 continue
 
             # 方向冲突检测: 已有持仓时不开反向仓
             direction = sig['signal']  # 'BUY' 或 'SELL'
             if current_dir and direction != current_dir:
                 log.info(f"    ⛔ {reason} — 但当前持仓方向为{current_dir}，跳过反向{direction}信号")
+                self._log_missed_signal(sig, f"方向冲突(持仓{current_dir}, 信号{direction})")
                 continue
 
             # 舆情方向过滤: 已关闭 (等待准确率验证)
