@@ -61,10 +61,9 @@ class GoldTrader:
         
         # 冷却期跟踪: {strategy: 上次亏损时间}
         self.cooldown_until = {}
-        # 日内亏损跟踪
-        self.daily_pnl = 0.0
-        self.daily_loss_count = 0     # 当日亏损笔数
-        self.daily_date = datetime.now().date()
+        # 日内亏损跟踪 (从文件恢复，防止重启丢失)
+        self.daily_state_file = config.DATA_DIR / "gold_daily_state.json"
+        self._load_daily_state()
         
         # 初始化舆情引擎
         self.sentiment = None
@@ -480,6 +479,33 @@ class GoldTrader:
 
         return exits
 
+    def _load_daily_state(self):
+        """从文件加载日内状态，防止重启丢失"""
+        state = self._load_json(self.daily_state_file, {})
+        saved_date = state.get('date', '')
+        today = str(datetime.now().date())
+        
+        if saved_date == today:
+            # 同一天，恢复状态
+            self.daily_pnl = state.get('pnl', 0.0)
+            self.daily_loss_count = state.get('loss_count', 0)
+            self.daily_date = datetime.now().date()
+            log.info(f"  📊 恢复日内状态: PnL=${self.daily_pnl:.2f}, 亏损{self.daily_loss_count}/{config.DAILY_MAX_LOSSES}笔")
+        else:
+            # 新的一天，重置
+            self.daily_pnl = 0.0
+            self.daily_loss_count = 0
+            self.daily_date = datetime.now().date()
+
+    def _save_daily_state(self):
+        """保存日内状态到文件"""
+        state = {
+            'date': str(self.daily_date),
+            'pnl': self.daily_pnl,
+            'loss_count': self.daily_loss_count,
+        }
+        self._save_json(self.daily_state_file, state)
+
     def _update_daily_pnl(self, profit: float):
         """更新日内盈亏跟踪"""
         today = datetime.now().date()
@@ -491,6 +517,7 @@ class GoldTrader:
         if profit < 0:
             self.daily_loss_count += 1
             log.info(f"     📊 日内亏损第{self.daily_loss_count}笔 (上限{config.DAILY_MAX_LOSSES}笔)")
+        self._save_daily_state()
 
     def _check_daily_loss_limit(self) -> bool:
         """检查是否超过日内最大亏损笔数"""
@@ -499,6 +526,7 @@ class GoldTrader:
             self.daily_pnl = 0.0
             self.daily_loss_count = 0
             self.daily_date = today
+            self._save_daily_state()
         # 笔数限制 (主要控制)
         if self.daily_loss_count >= config.DAILY_MAX_LOSSES:
             return True
