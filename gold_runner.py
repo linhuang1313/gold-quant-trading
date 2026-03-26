@@ -70,6 +70,21 @@ def main():
 
     trader = GoldTrader()
     
+    # 启动时先同步MT4持仓状态，避免重启后重复开仓
+    try:
+        trader._sync_positions_tracking()
+        positions = trader.get_strategy_positions()
+        if positions:
+            log.info(f"📊 启动时检测到 {len(positions)} 笔持仓:")
+            for p in positions:
+                tk = str(p['ticket'])
+                track = trader.tracking.get(tk, {})
+                log.info(f"   #{tk} {track.get('strategy','?')} {track.get('direction','?')} @ {p.get('open_price',0)}")
+        else:
+            log.info("📊 启动时无持仓")
+    except Exception as e:
+        log.warning(f"启动同步失败: {e}")
+    
     # Telegram启动通知
     try:
         import notifier
