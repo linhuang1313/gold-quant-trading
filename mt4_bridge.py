@@ -173,12 +173,12 @@ class MT4Bridge:
         data = self._read_json(heartbeat)
         if data:
             last_beat = data.get('timestamp', '')
-            # 如果心跳在30秒内
             try:
-                beat_time = datetime.fromisoformat(last_beat)
+                # MT4 TimeToString格式: "2026.03.28 01:05:00"
+                beat_time = datetime.strptime(last_beat, "%Y.%m.%d %H:%M:%S")
                 if (datetime.now() - beat_time).total_seconds() < 30:
                     return True
-            except:
+            except ValueError:
                 pass
         return False
 
