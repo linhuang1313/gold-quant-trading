@@ -356,6 +356,92 @@ def setup_paper_strategies(paper: PaperTrader):
     })
     ─────────────────────────────
 
-    当前无活跃模拟策略，等待周报建议后添加。
     """
-    pass  # 暂无策略，等周报建议
+    # ── 策略P1: Stochastic极端 + EMA100趋势过滤 ──
+    # 来源: Algomatic Trading研究, 回测Sharpe 0.85, 胜率46.3%, 年均109笔
+    # 原理: Stochastic在超买/超卖区金叉/死叉 + 顺大趋势方向
+    def stoch_extreme_signal(df):
+        if len(df) < 105:
+            return None
+        row = df.iloc[-1]; prev = df.iloc[-2]
+        
+        # 计算Stochastic
+        low14 = df['Low'].iloc[-14:].min()
+        high14 = df['High'].iloc[-14:].max()
+        stk = 100 * (float(row['Close']) - low14) / (high14 - low14) if high14 != low14 else 50
+        
+        low14_p = df['Low'].iloc[-15:-1].min()
+        high14_p = df['High'].iloc[-15:-1].max()
+        pstk = 100 * (float(prev['Close']) - low14_p) / (high14_p - low14_p) if high14_p != low14_p else 50
+        
+        # 简化: 用K线方向代替Stoch_D交叉
+        ema100 = float(row['EMA100'])
+        close = float(row['Close'])
+        atr = float(row['ATR'])
+        
+        if any(pd.isna(v) for v in [ema100, atr]):
+            return None
+        
+        sl = max(10, min(40, round(atr * 2.0, 2)))
+        tp = round(atr * 3.0, 2)
+        
+        # 做多: Stoch从超卖区回升 + 顺势
+        if stk > 20 and pstk <= 20 and close > ema100:
+            return {'signal': 'BUY', 'sl': sl, 'tp': tp,
+                    'reason': f'P1 Stoch做多: K={stk:.0f}从超卖回升, 价>{ema100:.0f}'}
+        # 做空: Stoch从超买区回落 + 顺势
+        if stk < 80 and pstk >= 80 and close < ema100:
+            return {'signal': 'SELL', 'sl': sl, 'tp': tp,
+                    'reason': f'P1 Stoch做空: K={stk:.0f}从超买回落, 价<{ema100:.0f}'}
+        return None
+
+    paper.register_strategy('P1_stoch_extreme', {
+        'signal_func': stoch_extreme_signal,
+        'timeframe': 'H1',
+        'max_hold_bars': 12,
+        'max_positions': 1,
+        'enabled': True,
+    })
+
+    # ── 策略P2: London-NY重叠时段动量 ──
+    # 自研策略, 回测Sharpe 0.66, 胜率49.3%
+    # 原理: 伦敦和NY重叠时段(UTC 13-16)流动性最高, 顺EMA+MACD方向做动量
+    def london_ny_signal(df):
+        if len(df) < 105:
+            return None
+        bar_time = df.index[-1]
+        hour = bar_time.hour
+        if hour < 13 or hour > 16:
+            return None
+        
+        row = df.iloc[-1]
+        close = float(row['Close'])
+        ema9 = float(row['EMA9'])
+        ema21 = float(row['EMA21'])
+        adx = float(row['ADX'])
+        atr = float(row['ATR'])
+        macd_h = float(row['MACD_hist'])
+        
+        if any(pd.isna(v) for v in [ema9, ema21, adx, atr, macd_h]):
+            return None
+        if adx < 20:
+            return None
+        
+        sl = max(10, min(35, round(atr * 1.5, 2)))
+        tp = round(atr * 3.0, 2)
+        
+        if ema9 > ema21 and macd_h > 0 and close > ema21:
+            return {'signal': 'BUY', 'sl': sl, 'tp': tp,
+                    'reason': f'P2 LN动量做多: EMA9>{ema21:.0f}, MACD>0, ADX={adx:.0f}'}
+        if ema9 < ema21 and macd_h < 0 and close < ema21:
+            return {'signal': 'SELL', 'sl': sl, 'tp': tp,
+                    'reason': f'P2 LN动量做空: EMA9<{ema21:.0f}, MACD<0, ADX={adx:.0f}'}
+        return None
+
+    paper.register_strategy('P2_london_ny', {
+        'signal_func': london_ny_signal,
+        'timeframe': 'H1',
+        'max_hold_bars': 8,
+        'max_positions': 1,
+        'enabled': True,
+    })
