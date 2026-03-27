@@ -501,3 +501,43 @@ def setup_paper_strategies(paper: PaperTrader):
         'max_positions': 1,
         'enabled': True,
     })
+
+    # ── 策略P3: 周五持仓过周末 (模拟盘) ──
+    # 回测: Sharpe 0.96 (ADX>24), 胜率44.2%, 但平均盈亏+$2.6/笔
+    # 原理: 周五收盘前顺趋势方向开仓，赌周末事件不会反转趋势
+    def friday_hold_signal(df):
+        if len(df) < 105:
+            return None
+        bar_time = df.index[-1]
+        # 只在周五UTC 19-21点触发 (SGT周六凌晨3-5点, 接近收盘)
+        if bar_time.weekday() != 4 or bar_time.hour < 19:
+            return None
+        
+        row = df.iloc[-1]
+        close = float(row['Close'])
+        ema100 = float(row['EMA100'])
+        adx = float(row['ADX'])
+        atr = float(row['ATR'])
+        
+        if any(pd.isna(v) for v in [ema100, adx, atr]):
+            return None
+        if adx < 24:
+            return None
+        
+        sl = max(15, min(50, round(atr * 2.0, 2)))
+        tp = round(atr * 3.0, 2)
+        
+        if close > ema100:
+            return {'signal': 'BUY', 'sl': sl, 'tp': tp,
+                    'reason': f'P3 周末持仓做多: 趋势向上(>{ema100:.0f}), ADX={adx:.0f}'}
+        else:
+            return {'signal': 'SELL', 'sl': sl, 'tp': tp,
+                    'reason': f'P3 周末持仓做空: 趋势向下(<{ema100:.0f}), ADX={adx:.0f}'}
+
+    paper.register_strategy('P3_friday_hold', {
+        'signal_func': friday_hold_signal,
+        'timeframe': 'H1',
+        'max_hold_bars': 48,  # 持仓到周一 (~48小时)
+        'max_positions': 1,
+        'enabled': True,
+    })
