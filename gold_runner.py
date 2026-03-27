@@ -13,6 +13,7 @@
 import sys
 import time
 import logging
+import subprocess
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -40,6 +41,32 @@ logging.basicConfig(
     ]
 )
 log = logging.getLogger(__name__)
+
+
+def sync_data_to_github():
+    """同步交易数据到GitHub (供云端日报cron读取)"""
+    try:
+        repo_dir = str(Path(__file__).parent)
+        # 只推送data目录下的JSON文件
+        subprocess.run(['git', 'add', 'data/*.json'], cwd=repo_dir, 
+                       capture_output=True, timeout=10)
+        result = subprocess.run(
+            ['git', 'commit', '-m', f'data sync {datetime.now().strftime("%Y-%m-%d %H:%M")}'],
+            cwd=repo_dir, capture_output=True, timeout=10
+        )
+        if result.returncode == 0:
+            push_result = subprocess.run(
+                ['git', 'push'], cwd=repo_dir, capture_output=True, timeout=30
+            )
+            if push_result.returncode == 0:
+                log.info("📤 交易数据已同步到GitHub")
+            else:
+                log.debug(f"git push失败: {push_result.stderr.decode()[:100]}")
+        else:
+            # 没有变化，不需要推送
+            pass
+    except Exception as e:
+        log.debug(f"数据同步失败: {e}")
 
 
 def is_market_open():
@@ -97,6 +124,7 @@ def main():
     scan_count = 0
     daily_start_pnl = trader.total_pnl.get('total_pnl', 0)
     daily_trades = 0
+    last_data_sync_hour = -1  # 数据同步跟踪
 
     while True:
         try:
@@ -174,6 +202,12 @@ def main():
 
                 except Exception as e:
                     log.error(f"信号扫描出错: {e}")
+
+            # 每小时同步交易数据到GitHub (供日报cron读取)
+            current_hour = now.hour
+            if current_hour != last_data_sync_hour and scan_count > 1:
+                last_data_sync_hour = current_hour
+                sync_data_to_github()
 
             # 等待下一次扫描
             time.sleep(config.SCAN_INTERVAL_SECONDS)

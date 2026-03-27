@@ -1,0 +1,14 @@
+{
+  "report_type": "evening",
+  "time": "2026-03-27T00:04:00+08:00",
+  "price_at_report": 4455.3,
+  "direction_bias": "中性",
+  "target_high": 4525,
+  "target_low": 4390,
+  "confidence": "低",
+  "key_reasoning": "昨日强反弹后，今日回吐至4450附近；美元偏强与美债收益率高位压制上行，但地缘风险仍可能带来上冲。短线更可能进入震荡区间(约4390-4525)等待数据与消息推动选择方向。",
+  "risk_events": "美国初请失业金(SGT 20:30)及美债收益率波动；中东局势突发消息；周末前仓位调整流动性变薄",
+  "today_pnl": "数据暂缺",
+  "today_trades": 0,
+  "today_win_rate": "数据暂缺"
+}
