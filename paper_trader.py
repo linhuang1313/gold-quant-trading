@@ -41,6 +41,9 @@ class PaperPosition:
         self.bars_held = 0
         self.max_favorable = 0.0  # MFE
         self.max_adverse = 0.0    # MAE
+        self.scaled_in = False    # 是否已加过仓
+        self.is_scale_in = False  # 是否为加仓单
+        self.original_sl = sl     # 原始止损(加仓前), 用于计算1R
 
     def update(self, high: float, low: float, close: float) -> Optional[Dict]:
         """
@@ -177,6 +180,9 @@ class PaperTrader:
             pos.bars_held = p.get('bars_held', 0)
             pos.max_favorable = p.get('max_favorable', 0)
             pos.max_adverse = p.get('max_adverse', 0)
+            pos.scaled_in = p.get('scaled_in', False)
+            pos.is_scale_in = p.get('is_scale_in', False)
+            pos.original_sl = p.get('original_sl', p.get('sl', 20))
             positions.append(pos)
         if positions:
             log.info(f"  📝 恢复{len(positions)}笔模拟持仓")
@@ -197,6 +203,9 @@ class PaperTrader:
                 'bars_held': pos.bars_held,
                 'max_favorable': pos.max_favorable,
                 'max_adverse': pos.max_adverse,
+                'scaled_in': pos.scaled_in,
+                'is_scale_in': pos.is_scale_in,
+                'original_sl': pos.original_sl,
             })
         self._save_json(self.positions_file, data)
 
@@ -280,11 +289,81 @@ class PaperTrader:
                     }
                     to_close.append((pos, result))
 
+        # ── 加仓检测 (在平仓之前) ──
+        new_scale_positions = []
+        for pos in self.positions:
+            if pos in [p for p, _ in to_close]:
+                continue  # 即将平仓的不做加仓检测
+
+            strat_config = self.strategies.get(pos.strategy, {})
+            scale_in_cfg = strat_config.get('scale_in', {})
+            if not scale_in_cfg.get('enabled', False):
+                continue
+            if pos.is_scale_in or pos.scaled_in:
+                continue
+
+            df = df_h1 if strat_config.get('timeframe', 'H1') == 'H1' else df_m15
+            if df is None or len(df) < 105:
+                continue
+
+            latest = df.iloc[-1]
+            close = float(latest['Close'])
+            adx = float(latest['ADX']) if not pd.isna(latest.get('ADX', float('nan'))) else 0
+
+            # 计算浮盈(点数)
+            if pos.direction == 'BUY':
+                unrealized = close - pos.entry_price
+            else:
+                unrealized = pos.entry_price - close
+
+            trigger_r = scale_in_cfg.get('trigger_r', 1.0)
+            adx_min = scale_in_cfg.get('adx_min', 24)
+
+            # 条件: 浮盈 >= 1R 且 ADX 仍在趋势区间
+            if unrealized >= pos.original_sl * trigger_r and adx >= adx_min:
+                # 检查已有加仓层数
+                layers = sum(1 for p in self.positions if p.is_scale_in and p.strategy == pos.strategy)
+                max_layers = scale_in_cfg.get('max_layers', 1)
+                if layers >= max_layers:
+                    continue
+
+                # 首仓止损移至保本
+                if scale_in_cfg.get('move_sl_to_breakeven', True):
+                    pos.sl = 0  # breakeven = entry_price ± 0
+                    log.info(f"  📝 [模拟加仓] 首仓止损移至保本 (原SL=${pos.original_sl:.1f})")
+
+                pos.scaled_in = True
+
+                # 创建加仓单
+                from strategies.signals import _calc_atr_stop, _calc_atr_tp
+                new_sl = _calc_atr_stop(df)
+                new_tp = _calc_atr_tp(df)
+
+                scale_pos = PaperPosition(
+                    strategy=pos.strategy,
+                    direction=pos.direction,
+                    entry_price=close,
+                    sl=new_sl,
+                    tp=new_tp,
+                    lots=0.01,
+                    reason=f"Keltner加仓: 首仓浮盈{unrealized:.1f}>={pos.original_sl*trigger_r:.1f}(1R), ADX={adx:.1f}",
+                )
+                scale_pos.is_scale_in = True
+                scale_pos.original_sl = new_sl
+                new_scale_positions.append(scale_pos)
+
+                log.info(f"  📝 [模拟加仓] {pos.direction} {pos.strategy} @ {close:.2f} "
+                         f"SL={new_sl:.1f} TP={new_tp:.1f} | 浮盈${unrealized:.1f} ADX={adx:.1f}")
+
+        if new_scale_positions:
+            self.positions.extend(new_scale_positions)
+            self._save_positions()
+
         # 处理平仓
         for pos, result in to_close:
             self._record_close(result)
             self.positions.remove(pos)
-        
+
         if to_close:
             self._save_positions()
 
@@ -500,4 +579,24 @@ def setup_paper_strategies(paper: PaperTrader):
         'max_hold_bars': 8,
         'max_positions': 1,
         'enabled': True,
+    })
+
+    # ── 策略P3: Keltner分层加仓 ──
+    # 测试目的: 验证在ADX 26-29趋势段，浮盈后加仓是否能提升收益
+    # 规则: 首仓浮盈>=1R + ADX>=24 → 首仓移保本 + 加仓1层
+    from strategies.signals import check_keltner_signal, ADX_TREND_THRESHOLD
+
+    paper.register_strategy('P3_keltner_scalein', {
+        'signal_func': check_keltner_signal,
+        'timeframe': 'H1',
+        'max_hold_bars': 15,
+        'max_positions': 2,   # 首仓+加仓 = 最多2层
+        'enabled': True,
+        'scale_in': {
+            'enabled': True,
+            'trigger_r': 1.0,                  # 浮盈>=1R触发
+            'adx_min': ADX_TREND_THRESHOLD,    # ADX>=24
+            'max_layers': 1,                   # 最多加仓1次
+            'move_sl_to_breakeven': True,      # 加仓时首仓移保本
+        },
     })
