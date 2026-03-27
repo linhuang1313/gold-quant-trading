@@ -6,17 +6,7 @@
     "entry_date": "2026.03.26 17:11:27",
     "lots": 0.01,
     "sl": 4480.37,
-    "last_profit": 6.42,
-    "last_price": 4421.4
-  },
-  "16357742": {
-    "strategy": "m15_rsi",
-    "direction": "SELL",
-    "entry_price": 4404.46,
-    "entry_date": "2026.03.27 09:30:58",
-    "lots": 0.03,
-    "sl": 4424.49,
-    "last_profit": -50.82,
-    "last_price": 4421.4
+    "last_profit": -0.88,
+    "last_price": 4428.7
   }
 }
