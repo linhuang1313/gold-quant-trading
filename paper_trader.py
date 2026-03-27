@@ -133,11 +133,14 @@ class PaperTrader:
             'total_pnl': 0, 'trade_count': 0, 'wins': 0, 'losses': 0
         })
 
-        # 活跃持仓 (内存中)
-        self.positions: List[PaperPosition] = []
+        # 活跃持仓 (从文件恢复，防止重启丢失)
+        self.positions: List[PaperPosition] = self._load_positions()
 
         # 已注册的策略
         self.strategies: Dict[str, dict] = {}
+        
+        # 上次信号时间跟踪，防止同一根K线重复触发
+        self._last_signal_bar: Dict[str, str] = {}  # {strategy: bar_time_str}
 
         log.info(f"📝 模拟盘启动 | 历史交易{self.state['trade_count']}笔 | 累计PnL ${self.state['total_pnl']:.2f}")
 
@@ -155,6 +158,47 @@ class PaperTrader:
     def _save_json(self, path, data):
         with open(path, 'w') as f:
             json.dump(data, f, indent=2, default=str)
+
+    def _load_positions(self) -> List[PaperPosition]:
+        """从文件恢复持仓"""
+        data = self._load_json(self.positions_file, [])
+        positions = []
+        for p in data:
+            pos = PaperPosition(
+                strategy=p.get('strategy', ''),
+                direction=p.get('direction', 'BUY'),
+                entry_price=p.get('entry_price', 0),
+                sl=p.get('sl', 20),
+                tp=p.get('tp', 0),
+                lots=p.get('lots', 0.01),
+                reason=p.get('reason', ''),
+            )
+            pos.entry_time = p.get('entry_time', '')
+            pos.bars_held = p.get('bars_held', 0)
+            pos.max_favorable = p.get('max_favorable', 0)
+            pos.max_adverse = p.get('max_adverse', 0)
+            positions.append(pos)
+        if positions:
+            log.info(f"  📝 恢复{len(positions)}笔模拟持仓")
+        return positions
+
+    def _save_positions(self):
+        """保存当前持仓到文件"""
+        data = []
+        for pos in self.positions:
+            data.append({
+                'strategy': pos.strategy,
+                'direction': pos.direction,
+                'entry_price': pos.entry_price,
+                'sl': pos.sl, 'tp': pos.tp,
+                'lots': pos.lots,
+                'reason': pos.reason,
+                'entry_time': pos.entry_time,
+                'bars_held': pos.bars_held,
+                'max_favorable': pos.max_favorable,
+                'max_adverse': pos.max_adverse,
+            })
+        self._save_json(self.positions_file, data)
 
     def register_strategy(self, name: str, config_dict: dict):
         """
@@ -240,6 +284,9 @@ class PaperTrader:
         for pos, result in to_close:
             self._record_close(result)
             self.positions.remove(pos)
+        
+        if to_close:
+            self._save_positions()
 
     def _scan_signals(self, df_h1, df_m15):
         """扫描各策略信号"""
@@ -267,10 +314,18 @@ class PaperTrader:
             if sig is None:
                 continue
 
+            # 防止同一根K线重复触发
+            bar_time_str = str(df.index[-1])
+            if self._last_signal_bar.get(name) == bar_time_str:
+                continue
+
             # 方向冲突检查
             active_dirs = set(p.direction for p in self.positions)
             if active_dirs and sig['signal'] not in active_dirs:
                 continue
+
+            # 记录触发时间
+            self._last_signal_bar[name] = bar_time_str
 
             # 虚拟开仓
             entry_price = float(df.iloc[-1]['Close'])
@@ -286,6 +341,7 @@ class PaperTrader:
                 reason=sig.get('reason', name),
             )
             self.positions.append(pos)
+            self._save_positions()
 
             log.info(f"  📝 [模拟] {sig['signal']} {name} @ {entry_price:.2f} "
                      f"SL={sl:.1f} TP={tp:.1f} | {sig.get('reason', '')}")
