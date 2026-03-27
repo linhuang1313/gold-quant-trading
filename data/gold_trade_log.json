@@ -442,5 +442,18 @@
     "profit": -50.82,
     "reason": "\ud83d\udea8 MT4\u81ea\u52a8\u5e73\u4ed3 (\u6b62\u635f\u6216\u624b\u52a8)",
     "time": "2026-03-27T10:01:36.936852"
+  },
+  {
+    "action": "OPEN",
+    "strategy": "orb",
+    "direction": "SELL",
+    "lots": 0.03,
+    "price": 4458.35,
+    "sl_pips": 3.09,
+    "tp_pips": 12.36,
+    "reason": "\ud83c\uddfa\ud83c\uddf8 ORB\u505a\u7a7a: \u4ef7\u683c4451.64 \u8dcc\u7834\u5f00\u76d8\u533a\u95f4\u4e0b\u6cbf4457.05 (\u533a\u95f4$4.1)",
+    "sentiment_score": 0.443,
+    "lot_multiplier": 1.0,
+    "time": "2026-03-27T14:09:04.115963"
   }
 ]
