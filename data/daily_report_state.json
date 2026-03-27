@@ -1,11 +1,14 @@
 {
-  "report_type": "morning",
-  "time": "2026-03-27T10:05:00+08:00",
-  "price_at_report": 4427.37,
-  "direction_bias": "偏空",
-  "target_high": 4475,
-  "target_low": 4360,
+  "report_type": "evening",
+  "time": "2026-03-27T22:00:00+08:00",
+  "price_at_report": 4429.0,
+  "direction_bias": "中性",
+  "target_high": 4500,
+  "target_low": 4350,
   "confidence": "中",
-  "key_reasoning": "宏观端：美元指数仍在99.9附近、10Y美债收益率仍处4.3%+高位，抬高持有黄金机会成本并压制反弹；微观端：昨夜跌势后仅弱反抽，优先按反弹做空/顺势空头思路对待。",
-  "risk_events": "密歇根消费者信心终值(今晚22:00 SGT/10:00 ET)；周五流动性偏薄；地缘风险(中东)随时触发急拉。"
+  "key_reasoning": "日线反弹但仍属大跌后的修复段，强美元/高收益率背景下反弹更可能在上方阻力位受压回落。",
+  "risk_events": "密歇根消费者信心终值(今晚22:00 SGT)及其通胀预期分项；周末前流动性走低；地缘风险突发。",
+  "today_pnl": "-39.05",
+  "today_trades": 5,
+  "strategy_health": {"keltner": "🟡", "orb": "🟡", "m15_rsi": "🟡"}
 }
