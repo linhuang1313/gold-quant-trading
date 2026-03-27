@@ -182,9 +182,15 @@ def main():
 
             scan_count += 1
 
-            # ── 心跳检测: EA是否在线 (启动宽限期内跳过) ──
-            if scan_count <= STARTUP_GRACE_SCANS:
-                pass  # 启动宽限期，不检测
+            # ── 心跳检测: EA是否在线 ──
+            # 跳过条件: 启动宽限期 / 周五收盘前1小时(UTC 20:00+)
+            now_utc = datetime.now(ZoneInfo('UTC'))
+            skip_heartbeat = (
+                scan_count <= STARTUP_GRACE_SCANS
+                or (now_utc.weekday() == 4 and now_utc.hour >= 20)  # 周五UTC 20:00后
+            )
+            if skip_heartbeat:
+                pass
             elif trader.bridge.is_connected():
                 if consecutive_disconnect > 0:
                     log.info(f"❤️ EA已恢复连接 (此前断开{consecutive_disconnect}次)")
