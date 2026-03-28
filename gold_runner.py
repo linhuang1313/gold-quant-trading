@@ -175,6 +175,29 @@ def main():
 
             is_open, status = is_market_open()
 
+            # ── 周五收盘前自动清仓 (UTC 20:50, 收盘前10分钟) ──
+            now_utc = datetime.now(ZoneInfo('UTC'))
+            is_friday_close = (now_utc.weekday() == 4 and now_utc.hour == 20 and now_utc.minute >= 50)
+            if is_friday_close and is_open:
+                positions = trader.get_strategy_positions()
+                if positions:
+                    log.warning(f"\n🚨 周五收盘前10分钟，强制清仓 {len(positions)} 笔持仓")
+                    for pos in positions:
+                        ticket = pos.get('ticket', 0)
+                        try:
+                            success = trader.bridge.close_order(ticket)
+                            profit = pos.get('profit', 0)
+                            log.info(f"  {'\u2705' if success else '\u274c'} #{ticket} 平仓 {'\u6210\u529f' if success else '\u5931\u8d25'} (当\u524d\u6d6e\u76c8${profit:.2f})")
+                            if success:
+                                notifier.notify_close(ticket, 'weekend_close', profit, '周五收盘前强制平仓')
+                        except Exception as e:
+                            log.error(f"  ❌ #{ticket} 平仓异常: {e}")
+                    notifier.send_telegram(
+                        f"🚨 <b>周五收盘前强制清仓</b>\n\n"
+                        f"平仓 {len(positions)} 笔持仓\n"
+                        f"原因: 避免周末持仓风险"
+                    )
+
             if not is_open:
                 log.info(f"💤 {status} | 等待5分钟...")
                 time.sleep(300)
@@ -242,7 +265,12 @@ def main():
                 log.debug(f"模拟盘扫描出错: {e}")
 
             # 每5分钟做一次完整信号扫描 (M15策略需要, 每10次循环×30秒≈5分钟)
-            if scan_count == 1 or scan_count % 10 == 0:
+            # 周五收盘前30分钟(UTC 20:30+)停止开新仓，只检查出场
+            is_friday_no_new = (now_utc.weekday() == 4 and now_utc.hour >= 20 and now_utc.minute >= 30)
+            if is_friday_no_new:
+                if scan_count % 20 == 0:
+                    log.info(f"🚧 周五收盘前30分钟，停止开新仓，只监控出场")
+            elif scan_count == 1 or scan_count % 10 == 0:
                 log.info(f"\n📊 完整信号扫描 (#{scan_count})")
                 try:
                     result = trader.scan_and_trade()
